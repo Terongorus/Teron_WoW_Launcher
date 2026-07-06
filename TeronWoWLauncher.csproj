@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>TeronWoWLauncher</RootNamespace>
+    <AssemblyName>TeronWoWLauncher</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+
+    <!--
+      WoW.exe (1.12.1) is a 32-bit binary. This launcher MUST run as a 32-bit
+      process: the DLL injection uses CreateRemoteThread with the address of
+      kernel32!LoadLibraryW, which is only valid in the target when both
+      processes share the same bitness. Do NOT change this to x64 or AnyCPU.
+    -->
+    <PlatformTarget>x86</PlatformTarget>
+    <Platforms>x86</Platforms>
+
+    <!-- Product identity / display. Title bar reads these live from assembly metadata. -->
+    <Product>Teron WoW Launcher (TWL)</Product>
+    <Company>Teronverse</Company>
+    <Authors>Kaloyan Kolev</Authors>
+    <Version>0.1.0</Version>
+    <!-- Keep AssemblyInformationalVersion clean ("0.1.0", not "0.1.0+<gitsha>"). -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x86'">
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x86'">
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <!--
+    DPAPI (System.Security.Cryptography.ProtectedData) is provided in-box by the
+    net10.0-windows framework, so no PackageReference is required.
+  -->
+
+  <ItemGroup>
+    <!-- Extracts .rar/.7z addon archives (the BCL only handles .zip). Pure-managed, MIT. -->
+    <PackageReference Include="SharpCompress" Version="0.49.1" />
+  </ItemGroup>
+
+</Project>
