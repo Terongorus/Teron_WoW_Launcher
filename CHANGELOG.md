@@ -7,6 +7,10 @@ Versions follow major.minor.hotfix (e.g. 1.2.3).
 
 ## [1.6.1] - 2026-07-07
 
+### Added
+
+- An application icon (`game.ico`), used for the launcher's own executable/taskbar/Alt+Tab, and for the installer wizard and its "Programs and Features" uninstall entry.
+
 ### Fixed
 
 - Home tab's Readme/Changelog preview boxes were rendering at different heights despite sharing equal grid space, because of a stray margin on one of them; both now split the column exactly evenly.

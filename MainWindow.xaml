@@ -8,6 +8,7 @@
         mc:Ignorable="d" x:Class="TeronWoWLauncher.MainWindow"
         Height="700" Width="980" MinHeight="540" MinWidth="820"
         WindowStartupLocation="CenterScreen"
+        Icon="game.ico"
         Background="#1B1B1F">
 
   <shell:WindowChrome.WindowChrome>

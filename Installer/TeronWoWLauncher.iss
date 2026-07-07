@@ -34,6 +34,7 @@ DefaultDirName={autopf}\TeronWoWLauncher
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE.txt
+SetupIconFile=..\game.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\bin\InstallerPackage
 OutputBaseFilename=TeronWoWLauncherSetup-x86
