@@ -37,8 +37,8 @@ public partial class MainWindow : Window
     private readonly AddonLibrary _addons = new();
 
     private readonly List<PatchControl> _patchControls = new();
-    private readonly ObservableCollection<string> _dllItems = new();
-    private readonly ObservableCollection<string> _detectedDllItems = new();
+    private readonly ObservableCollection<DllInfo> _dllItems = new();
+    private readonly ObservableCollection<DllInfo> _detectedDllItems = new();
     private readonly ObservableCollection<string> _ignoredDllItems = new();
     private readonly ObservableCollection<InstalledAddon> _addonItems = new();
 
@@ -59,6 +59,8 @@ public partial class MainWindow : Window
     private UpdateCheckResult? _pendingUpdateCheck;
 
     private static readonly Brush MutedBrush = new SolidColorBrush(Color.FromRgb(0x8A, 0x8A, 0x92));
+    private static readonly Brush BodyBrush = new SolidColorBrush(Color.FromRgb(0xC8, 0xC8, 0xD0));
+    private const double BodyFontSize = 14;
     private static readonly Brush PlayColor = new SolidColorBrush(Color.FromRgb(0x3B, 0x7D, 0x3B));
     private static readonly Brush InstallColor = new SolidColorBrush(Color.FromRgb(0x2E, 0x6D, 0xA4));
     private static readonly Brush UpdateColor = new SolidColorBrush(Color.FromRgb(0xC9, 0x92, 0x2B));
@@ -90,6 +92,7 @@ public partial class MainWindow : Window
         Title = AppInfo.DisplayNameWithVersion;
         HeaderText.Text = AppInfo.DisplayName;
         VersionLabel.Text = $"v{AppInfo.Version}";
+        WindowChromeHelper.FixMaximizedBounds(this);
         StateChanged += OnWindowStateChanged;
         Closing += OnWindowClosing;
 
@@ -271,7 +274,25 @@ public partial class MainWindow : Window
             _ => (kind, string.Empty),
         };
 
-        new MarkdownPreviewDialog(title, markdown) { Owner = this }.ShowDialog();
+        ShowModal(new MarkdownPreviewDialog(title, markdown));
+    }
+
+    /// <summary>
+    /// Shows one of our own dialogs modally, fogging the launcher behind it for the duration. Not
+    /// used for native OS dialogs (OpenFileDialog etc.) — those already have their own modal chrome.
+    /// </summary>
+    private bool? ShowModal(Window dialog)
+    {
+        dialog.Owner = this;
+        ModalOverlay.Visibility = Visibility.Visible;
+        try
+        {
+            return dialog.ShowDialog();
+        }
+        finally
+        {
+            ModalOverlay.Visibility = Visibility.Collapsed;
+        }
     }
 
     // ---------------- Navigation ----------------
@@ -348,9 +369,15 @@ public partial class MainWindow : Window
             Slider? slider = null;
             if (patch.Parameter is PatchParameter p)
             {
-                double value = _settings.Current.PatchParameters.TryGetValue(patch.Id, out double stored)
-                    ? stored
-                    : p.Default;
+                double value = p.Default;
+                if (_settings.Current.PatchParameters.TryGetValue(patch.Id, out double stored))
+                {
+                    // One-time migration: FoV used to be stored (and edited) in radians; a leftover
+                    // radians value will always be well under the new degrees-based minimum.
+                    value = patch.Id == "fov" && stored < p.Min
+                        ? stored * 180.0 / Math.PI
+                        : stored;
+                }
                 value = Math.Clamp(value, p.Min, p.Max);
 
                 slider = new Slider
@@ -358,40 +385,73 @@ public partial class MainWindow : Window
                     Minimum = p.Min,
                     Maximum = p.Max,
                     Value = value,
-                    Width = 260,
+                    Width = 380,
                     VerticalAlignment = VerticalAlignment.Center,
                     IsSnapToTickEnabled = p.IsInteger,
                     TickFrequency = p.IsInteger ? 1 : 0.01,
                     IsEnabled = isChecked,
                 };
 
-                var valueLabel = new TextBlock
+                var valueBox = new TextBox
                 {
-                    Width = 70,
+                    Width = 65,
                     Margin = new Thickness(10, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center,
+                    VerticalContentAlignment = VerticalAlignment.Center,
+                    TextAlignment = TextAlignment.Center,
+                    IsEnabled = isChecked,
                 };
-                void UpdateValueLabel() => valueLabel.Text = FormatValue(slider.Value, p);
-                slider.ValueChanged += (_, _) =>
-                {
-                    UpdateValueLabel();
-                    SchedulePatchApply();
-                };
-                UpdateValueLabel();
 
                 Slider capturedSlider = slider;
-                box.Checked += (_, _) => capturedSlider.IsEnabled = true;
-                box.Unchecked += (_, _) => capturedSlider.IsEnabled = false;
+                TextBox capturedBox = valueBox;
 
-                var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(24, 0, 0, 8) };
-                row.Children.Add(new TextBlock
+                void UpdateValueBox() => capturedBox.Text = FormatNumericValue(capturedSlider.Value, p);
+
+                void CommitValueBox()
                 {
-                    Text = $"{p.Label}:",
-                    Width = 150,
-                    VerticalAlignment = VerticalAlignment.Center,
-                });
+                    if (double.TryParse(capturedBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed))
+                    {
+                        capturedSlider.Value = Math.Clamp(parsed, p.Min, p.Max);
+                    }
+
+                    UpdateValueBox(); // resync display even if parsing failed or clamping produced no change
+                }
+
+                slider.ValueChanged += (_, _) =>
+                {
+                    UpdateValueBox();
+                    SchedulePatchApply();
+                };
+                valueBox.LostFocus += (_, _) => CommitValueBox();
+                valueBox.KeyDown += (_, e) =>
+                {
+                    if (e.Key == Key.Enter)
+                    {
+                        CommitValueBox();
+                        e.Handled = true;
+                    }
+                };
+                UpdateValueBox();
+
+                box.Checked += (_, _) => { capturedSlider.IsEnabled = true; capturedBox.IsEnabled = true; };
+                box.Unchecked += (_, _) => { capturedSlider.IsEnabled = false; capturedBox.IsEnabled = false; };
+
+                // No left-side label here — it would just repeat the CheckBox's own Name/Description
+                // directly above, which already identifies this slider.
+                var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(24, 0, 0, 8) };
                 row.Children.Add(slider);
-                row.Children.Add(valueLabel);
+                row.Children.Add(valueBox);
+                if (!string.IsNullOrEmpty(p.Unit))
+                {
+                    row.Children.Add(new TextBlock
+                    {
+                        Text = p.Unit,
+                        Foreground = MutedBrush,
+                        FontSize = BodyFontSize,
+                        Margin = new Thickness(6, 0, 0, 0),
+                        VerticalAlignment = VerticalAlignment.Center,
+                    });
+                }
                 PatchesPanel.Children.Add(row);
             }
 
@@ -400,17 +460,14 @@ public partial class MainWindow : Window
 
         if (catalog.Count == 0)
         {
-            PatchesPanel.Children.Add(new TextBlock { Text = "No executable tweaks available yet.", Foreground = MutedBrush });
+            PatchesPanel.Children.Add(new TextBlock { Text = "No executable tweaks available yet.", Foreground = MutedBrush, FontSize = BodyFontSize });
         }
     }
 
-    private static string FormatValue(double value, PatchParameter p)
-    {
-        string unit = string.IsNullOrEmpty(p.Unit) ? string.Empty : " " + p.Unit;
-        return p.IsInteger
-            ? ((int)Math.Round(value)).ToString(CultureInfo.InvariantCulture) + unit
-            : value.ToString("0.###", CultureInfo.InvariantCulture) + unit;
-    }
+    private static string FormatNumericValue(double value, PatchParameter p)
+        => p.IsInteger
+            ? ((int)Math.Round(value)).ToString(CultureInfo.InvariantCulture)
+            : value.ToString("0.###", CultureInfo.InvariantCulture);
 
     private void SchedulePatchApply()
     {
@@ -449,14 +506,15 @@ public partial class MainWindow : Window
 
     private void RefreshDllList()
     {
+        string wowDir = CurrentWowDir();
         _dllItems.Clear();
-        foreach (string name in _dlls.ReadActiveNames(CurrentWowDir()))
+        foreach (string name in _dlls.ReadActiveNames(wowDir))
         {
-            _dllItems.Add(name);
+            _dllItems.Add(DllMetadataReader.Read(name, _dlls.ResolvePath(wowDir, name)));
         }
     }
 
-    private void SaveDllList() => _dlls.WriteActiveNames(CurrentWowDir(), new List<string>(_dllItems));
+    private void SaveDllList() => _dlls.WriteActiveNames(CurrentWowDir(), _dllItems.Select(d => d.Name).ToList());
 
     private void OnAddDll(object sender, RoutedEventArgs e)
     {
@@ -479,9 +537,9 @@ public partial class MainWindow : Window
             ? Path.GetFileName(chosen)
             : chosen;
 
-        if (!_dllItems.Contains(entry))
+        if (!_dllItems.Any(d => string.Equals(d.Name, entry, StringComparison.OrdinalIgnoreCase)))
         {
-            _dllItems.Add(entry);
+            _dllItems.Add(DllMetadataReader.Read(entry, chosen));
             SaveDllList();
             RefreshDetectedDlls();
         }
@@ -489,7 +547,7 @@ public partial class MainWindow : Window
 
     private void OnRemoveDll(object sender, RoutedEventArgs e)
     {
-        if (DllList.SelectedItem is string item)
+        if (DllList.SelectedItem is DllInfo item)
         {
             _dllItems.Remove(item);
             SaveDllList();
@@ -517,10 +575,11 @@ public partial class MainWindow : Window
 
     private void RefreshDetectedDlls()
     {
+        string wowDir = CurrentWowDir();
         _detectedDllItems.Clear();
-        foreach (string name in _dlls.ScanForUntrackedDlls(CurrentWowDir(), _settings.Current.IgnoredDetectedDlls))
+        foreach (string name in _dlls.ScanForUntrackedDlls(wowDir, _settings.Current.IgnoredDetectedDlls))
         {
-            _detectedDllItems.Add(name);
+            _detectedDllItems.Add(DllMetadataReader.Read(name, Path.Combine(wowDir, name)));
         }
     }
 
@@ -528,17 +587,17 @@ public partial class MainWindow : Window
 
     private void OnAddDetectedDlls(object sender, RoutedEventArgs e)
     {
-        List<string> selected = DetectedDllList.SelectedItems.Cast<string>().ToList();
+        List<DllInfo> selected = DetectedDllList.SelectedItems.Cast<DllInfo>().ToList();
         if (selected.Count == 0)
         {
             return;
         }
 
-        foreach (string name in selected)
+        foreach (DllInfo item in selected)
         {
-            if (!_dllItems.Contains(name))
+            if (!_dllItems.Any(d => string.Equals(d.Name, item.Name, StringComparison.OrdinalIgnoreCase)))
             {
-                _dllItems.Add(name);
+                _dllItems.Add(item);
             }
         }
 
@@ -548,18 +607,18 @@ public partial class MainWindow : Window
 
     private void OnIgnoreDetectedDlls(object sender, RoutedEventArgs e)
     {
-        List<string> selected = DetectedDllList.SelectedItems.Cast<string>().ToList();
+        List<DllInfo> selected = DetectedDllList.SelectedItems.Cast<DllInfo>().ToList();
         if (selected.Count == 0)
         {
             return;
         }
 
         List<string> ignored = _settings.Current.IgnoredDetectedDlls;
-        foreach (string name in selected)
+        foreach (DllInfo item in selected)
         {
-            if (!ignored.Contains(name, StringComparer.OrdinalIgnoreCase))
+            if (!ignored.Contains(item.Name, StringComparer.OrdinalIgnoreCase))
             {
-                ignored.Add(name);
+                ignored.Add(item.Name);
             }
         }
 
@@ -597,6 +656,19 @@ public partial class MainWindow : Window
         RefreshDetectedDlls();
     }
 
+    private void OnUnignoreAllDlls(object sender, RoutedEventArgs e)
+    {
+        if (_settings.Current.IgnoredDetectedDlls.Count == 0)
+        {
+            return;
+        }
+
+        _settings.Current.IgnoredDetectedDlls.Clear();
+        _settings.Save();
+        RefreshIgnoredDllList();
+        RefreshDetectedDlls();
+    }
+
     // ---------------- MPQ tab ----------------
 
     private void RefreshMpqList()
@@ -611,6 +683,7 @@ public partial class MainWindow : Window
             {
                 Text = "No custom MPQ patches found in Data\\.",
                 Foreground = MutedBrush,
+                FontSize = BodyFontSize,
                 Margin = new Thickness(0, 6, 0, 0),
             });
             return;
@@ -707,8 +780,8 @@ public partial class MainWindow : Window
 
     private async void OnOpenAddAddonDialog(object sender, RoutedEventArgs e)
     {
-        var dialog = new AddAddonDialog { Owner = this };
-        if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.Input))
+        var dialog = new AddAddonDialog();
+        if (ShowModal(dialog) == true && !string.IsNullOrWhiteSpace(dialog.Input))
         {
             await AddAddonAsync(dialog.Input);
         }
@@ -774,8 +847,8 @@ public partial class MainWindow : Window
         AddonLibrary.LocalAddonSyncResult sync = _addons.SyncLocalAddons(wowDir);
         if (sync.Conflicts.Count > 0)
         {
-            var dialog = new LocalAddonsDialog(sync.Conflicts) { Owner = this };
-            if (dialog.ShowDialog() == true)
+            var dialog = new LocalAddonsDialog(sync.Conflicts);
+            if (ShowModal(dialog) == true)
             {
                 foreach (LocalAddonCandidate candidate in dialog.Selected)
                 {
@@ -989,16 +1062,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        MessageBoxResult confirm = MessageBox.Show(
-            this,
+        var confirm = new ConfirmDialog(
+            "Repair Game Files",
             "This will re-download and reinstall all game files from the source URL, overwriting anything " +
             "that differs locally. There is no per-file update list for this client, so the whole archive " +
             "is refreshed. Continue?",
-            "Repair Game Files",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning);
-
-        if (confirm != MessageBoxResult.Yes)
+            confirmText: "Repair",
+            cancelText: "Cancel");
+        if (ShowModal(confirm) != true)
         {
             return;
         }
@@ -1053,8 +1124,8 @@ public partial class MainWindow : Window
     private async Task RunInstallFlowAsync()
     {
         string defaultDir = !string.IsNullOrWhiteSpace(GameFolderBox.Text) ? GameFolderBox.Text.Trim() : AppContext.BaseDirectory;
-        var dialog = new InstallDialog(defaultDir) { Owner = this };
-        if (dialog.ShowDialog() != true)
+        var dialog = new InstallDialog(defaultDir);
+        if (ShowModal(dialog) != true)
         {
             return;
         }
@@ -1088,8 +1159,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        var dialog = new UpdateConfirmDialog(_pendingUpdateCheck.Detail) { Owner = this };
-        if (dialog.ShowDialog() != true)
+        var dialog = new UpdateConfirmDialog(_pendingUpdateCheck.Detail);
+        if (ShowModal(dialog) != true)
         {
             return;
         }
@@ -1191,5 +1262,10 @@ public partial class MainWindow : Window
             LogBox.AppendText($"{entry.Timestamp:HH:mm:ss} [{entry.Level}] {entry.Message}{Environment.NewLine}");
             LogBox.ScrollToEnd();
         });
+    }
+
+    private void RadioButton_Checked(object sender, RoutedEventArgs e)
+    {
+
     }
 }

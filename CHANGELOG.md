@@ -5,6 +5,101 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [1.6.1] - 2026-07-07
+
+### Fixed
+
+- Home tab's Readme/Changelog preview boxes were rendering at different heights despite sharing equal grid space, because of a stray margin on one of them; both now split the column exactly evenly.
+
+## [1.6.0] - 2026-07-07
+
+### Added
+
+- Settings and Tweaks tabs are now centered cards with their own dark background/border, instead of their content being pinned to the left edge of a bare tab.
+- Settings tab's Realmlist/Client download URL/Login delay fields now have short headers with the extra explanatory text moved into a description line below, matching every other field's header style; the login-delay header was reworded to make clear it's the auto-login delay specifically.
+- "Un-ignore All" button next to "Un-ignore Selected" on the Settings tab, clearing every ignored DLL in one click instead of requiring a multi-select first.
+- DLL lists (tracked and detected) now show each file's version, author, and description alongside its name, read from the DLL's own version resource where one is present.
+- Repair Game Files' confirmation is now a themed dialog matching the rest of the app, instead of a plain Windows message box.
+
+### Changed
+
+- Tweaks tab: removed the per-slider label that just repeated the tweak's own name/header, and widened every slider to use the freed space; value boxes are center-aligned.
+
+## [1.5.1] - 2026-07-07
+
+### Fixed
+
+- Add Addon dialog's Cancel/Add buttons were clipped by the bottom of its card after the dialog got its own window chrome; the dialog is taller now.
+
+## [1.5.0] - 2026-07-07
+
+### Added
+
+- Every dialog (Install, Add Addon, Local Addons, Update Confirm, Markdown Preview) now uses the app's own dark window chrome instead of the OS's default title bar, with rounded outer corners matching their inner content card.
+- Every dialog is locked to a fixed size and position — none of them can be dragged or resized anymore, staying exactly where they're centered on the launcher.
+- The launcher visibly darkens ("fogs") behind any dialog it opens, instead of looking identical whether a dialog is open or not.
+- Markdown preview dialog (opened from the Home tab's Readme/Changelog panels) now uses the same flat scrollbar as the rest of the app, hides Markdig's built-in zoom/print toolbar, and scrolls noticeably faster per mouse-wheel notch.
+
+### Fixed
+
+- Maximizing the launcher (or any dialog with its own window chrome) no longer overhangs the screen edge/taskbar by the invisible resize-border thickness — windows now size themselves to the monitor's actual work area when maximized.
+
+## [1.4.1] - 2026-07-07
+
+### Fixed
+
+- DLLs tab: the tracked/detected lists were reduced to a sliver (or collapsed entirely when empty) after moving their buttons above the list, because the row heights weren't updated to match — the list row is the one that grows now, not the button row.
+
+## [1.4.0] - 2026-07-07
+
+### Added
+
+- DLLs tab split into two side-by-side columns (tracked DLLs on the left, detected-but-untracked on the right) with a vertical divider, matching the Home tab's layout; both lists' add/remove/refresh buttons now sit above their list instead of below, matching the Addons and MPQ Patches tabs.
+
+## [1.3.1] - 2026-07-07
+
+### Fixed
+
+- Nav tab labels (Home/Tweaks/DLLs/...) silently ignored their own font size and never showed the gold "selected" color, and a long checkbox label ("Remember password...") was clipped instead of wrapping — both were the same underlying cause as 1.2.1 (an app-wide implicit style overriding a control's own styling), just for `FontSize`/`Foreground` instead of `FontFamily`. The base text style is now opt-in everywhere instead of applying automatically.
+
+## [1.3.0] - 2026-07-07
+
+### Added
+
+- A single consistent text hierarchy (heading/sub-heading/body/caption/micro sizes and colors) applied across every tab and dialog, instead of each screen picking its own font size and color combination.
+- Tweaks tab: slider values are now editable text boxes instead of read-only labels, every value is a whole number, and Widescreen FoV is shown/edited in degrees instead of raw radians (existing saved values are migrated automatically).
+
+## [1.2.1] - 2026-07-07
+
+### Fixed
+
+- Every icon-only button (toolbar actions and the window's own minimize/maximize/close) rendered as a blank "tofu" box instead of its icon, caused by an app-wide text style unintentionally overriding the icon font on any button whose glyph is plain text content.
+
+## [1.2.0] - 2026-07-07
+
+### Added
+
+- Rounded corners on every text box, password box, and list box, matching the buttons and Markdown preview panels.
+- Checkboxes restyled to match the app's theme (a small rounded box with a gold fill and checkmark when checked) instead of the OS default.
+- A vertical divider between the Home tab's "How to use" and "Login" panels.
+
+### Changed
+
+- The handful of control styles (text/checkbox/text box/password box/list box/button/scrollbar) that were previously duplicated per-window are now defined once, app-wide, so every dialog picks them up automatically instead of falling back to unstyled OS defaults.
+
+## [1.1.1] - 2026-07-07
+
+### Fixed
+
+- Auto-login could crash the whole launch right after DLL injection when it tried to detect that the login screen had finished loading, because opening a handle to the freshly-launched game process was denied; it now falls back cleanly to a fixed delay instead of failing.
+
+## [1.1.0] - 2026-07-07
+
+### Added
+
+- Auto-login now types the account/password using direct Unicode character injection instead of translating through the current keyboard layout, so a non-English active layout can no longer type the wrong characters into the login screen (a likely cause of client-side account lockouts after repeated bad "passwords").
+- Auto-login now waits for the client to actually finish loading (based on its disk I/O activity going quiet) instead of a fixed configurable delay, and keeps the game window focused the whole time.
+
 ## [1.0.0] - 2026-07-07
 
 First official release.

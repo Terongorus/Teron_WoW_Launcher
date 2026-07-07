@@ -22,8 +22,8 @@
     <Product>Teron WoW Launcher (TWL)</Product>
     <Company>Teronverse</Company>
     <Authors>Kaloyan Kolev</Authors>
-    <Version>1.0.0</Version>
-    <!-- Keep AssemblyInformationalVersion clean ("1.0.0", not "1.0.0+<gitsha>"). -->
+    <Version>1.6.1</Version>
+    <!-- Keep AssemblyInformationalVersion clean ("1.6.1", not "1.6.1+<gitsha>"). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 

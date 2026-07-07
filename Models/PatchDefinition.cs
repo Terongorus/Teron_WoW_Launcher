@@ -40,12 +40,11 @@ public sealed class PatchStep
 /// <summary>Optional numeric knob for a patch (e.g. render distance, nameplate range).</summary>
 public sealed class PatchParameter
 {
-    public required string Label { get; init; }
     public double Min { get; init; }
     public double Max { get; init; }
     public double Default { get; init; }
 
-    /// <summary>True when the value is a whole number (e.g. sound channels); false for floats (FoV).</summary>
+    /// <summary>True when the value is shown/edited as a whole number (every current tweak).</summary>
     public bool IsInteger { get; init; }
 
     /// <summary>Optional unit shown in the UI, e.g. "yds" or "rad".</summary>

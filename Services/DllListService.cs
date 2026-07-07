@@ -40,6 +40,9 @@ public sealed class DllListService
     public string DllsFilePath(string wowDir) => Path.Combine(wowDir, DllsFileName);
     public string CacheFilePath(string wowDir) => Path.Combine(wowDir, CacheFileName);
 
+    /// <summary>Resolves a dlls.txt entry (relative or absolute) to an absolute path, without checking existence.</summary>
+    public string ResolvePath(string wowDir, string name) => NormalizePath(wowDir, name);
+
     /// <summary>
     /// The active DLL entries exactly as written (comments and blank lines removed, each trimmed),
     /// in file order. These are raw names/paths, not yet resolved or existence-checked.

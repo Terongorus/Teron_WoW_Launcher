@@ -14,6 +14,7 @@ internal static class User32
 
     public const uint INPUT_KEYBOARD = 1;
     public const uint KEYEVENTF_KEYUP = 0x0002;
+    public const uint KEYEVENTF_UNICODE = 0x0004;
 
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -31,11 +32,6 @@ internal static class User32
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-
-    // Returns -1 if the character cannot be produced on the current keyboard layout.
-    // Low byte = virtual-key code; high byte = shift state (bit 0 = Shift, 1 = Ctrl, 2 = Alt).
-    [DllImport("user32.dll")]
-    public static extern short VkKeyScan(char ch);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct INPUT
