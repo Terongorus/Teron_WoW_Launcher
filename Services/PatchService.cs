@@ -85,6 +85,8 @@ public sealed class PatchService
                 $"No pristine {BackupFileName} to rebuild from. Establish the backup first.");
         }
 
+        CleanupStaleTempFiles(wowDir);
+
         byte[] image = File.ReadAllBytes(backup);
         _log.Info($"Rebuilding {WowExeFileName} from pristine backup; {enabledIds.Count} patch(es) enabled.");
 
@@ -99,11 +101,29 @@ public sealed class PatchService
             ApplyPatch(image, patch, value);
         }
 
-        // Only touch disk once the whole image patched successfully. Write to a temp file, then swap.
-        string temp = exe + ".tmp";
-        File.WriteAllBytes(temp, image);
-        File.Copy(temp, exe, overwrite: true);
-        File.Delete(temp);
+        // Only touch disk once the whole image patched successfully. Write to a uniquely-named temp
+        // file first (avoids collisions with any other overlapping rebuild), then swap it in.
+        string temp = Path.Combine(wowDir, $"{WowExeFileName}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllBytes(temp, image);
+
+            try
+            {
+                File.Copy(temp, exe, overwrite: true);
+            }
+            catch (IOException ex)
+            {
+                throw new IOException(
+                    $"Could not write {WowExeFileName} — it's currently in use, most likely because " +
+                    "the game is running. Close it and try again.", ex);
+            }
+        }
+        finally
+        {
+            try { File.Delete(temp); } catch { /* best-effort cleanup */ }
+        }
+
         _log.Info($"{WowExeFileName} rebuilt successfully.");
     }
 
@@ -118,6 +138,22 @@ public sealed class PatchService
 
         File.Copy(backup, WowExePath(wowDir), overwrite: true);
         _log.Info($"Restored pristine {WowExeFileName} from backup.");
+    }
+
+    /// <summary>Remove any leftover *.tmp rebuild artifacts from a previous crashed/killed run.</summary>
+    private void CleanupStaleTempFiles(string wowDir)
+    {
+        try
+        {
+            foreach (string stale in Directory.EnumerateFiles(wowDir, $"{WowExeFileName}.*.tmp"))
+            {
+                File.Delete(stale);
+            }
+        }
+        catch
+        {
+            // Best-effort; a leftover temp file doesn't block anything since it's uniquely named.
+        }
     }
 
     /// <summary>Best-effort detection of which non-parameterized patches are present in WoW.exe.</summary>

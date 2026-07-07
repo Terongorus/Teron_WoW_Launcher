@@ -1,237 +1,587 @@
-<Window x:Class="TeronWoWLauncher.MainWindow"
+<Window
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:markdig="clr-namespace:Markdig.Wpf;assembly=Markdig.Wpf"
+        xmlns:svc="clr-namespace:TeronWoWLauncher.Services"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        mc:Ignorable="d" x:Class="TeronWoWLauncher.MainWindow"
         Height="700" Width="980" MinHeight="540" MinWidth="820"
         WindowStartupLocation="CenterScreen"
         Background="#1B1B1F">
 
-    <Window.Resources>
-        <Style TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#C8C8D0"/>
-        </Style>
-        <Style TargetType="CheckBox">
-            <Setter Property="Foreground" Value="#DADADD"/>
-            <Setter Property="Margin" Value="0,10,0,0"/>
-        </Style>
-        <Style TargetType="TextBox">
-            <Setter Property="Background" Value="#26262B"/>
-            <Setter Property="Foreground" Value="#EDEDED"/>
-            <Setter Property="BorderBrush" Value="#3A3A42"/>
-            <Setter Property="Padding" Value="5,4"/>
-            <Setter Property="CaretBrush" Value="#EDEDED"/>
-        </Style>
-        <Style TargetType="PasswordBox">
-            <Setter Property="Background" Value="#26262B"/>
-            <Setter Property="Foreground" Value="#EDEDED"/>
-            <Setter Property="BorderBrush" Value="#3A3A42"/>
-            <Setter Property="Padding" Value="5,4"/>
-            <Setter Property="CaretBrush" Value="#EDEDED"/>
-        </Style>
-        <Style TargetType="Button">
-            <Setter Property="Background" Value="#33333A"/>
-            <Setter Property="Foreground" Value="#EDEDED"/>
-            <Setter Property="BorderBrush" Value="#4A4A54"/>
-            <Setter Property="Padding" Value="10,5"/>
-        </Style>
-        <Style TargetType="ListBox">
-            <Setter Property="Background" Value="#101014"/>
-            <Setter Property="Foreground" Value="#DADADD"/>
-            <Setter Property="BorderBrush" Value="#3A3A42"/>
-        </Style>
-    </Window.Resources>
+  <shell:WindowChrome.WindowChrome>
+    <!--
+      Replaces the default Windows title bar/icon/min-max-close with our own row (below), while
+      keeping the OS's resize handles, Aero Snap (drag-to-edge, Win+arrow), and drop shadow — those
+      come from WindowChrome itself, not from the native caption we're hiding. CaptionHeight must
+      match the custom title bar row's own Height so the OS treats exactly that strip as the
+      draggable/double-click-to-maximize caption area; the three buttons inside opt back out of that
+      via WindowChrome.IsHitTestVisibleInChrome so clicks register as clicks, not drags.
+    -->
+    <shell:WindowChrome CaptionHeight="52" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"
+                         UseAeroCaptionButtons="False"/>
+  </shell:WindowChrome.WindowChrome>
 
-    <DockPanel>
-        <!-- Header with the prominent Play button -->
-        <Border DockPanel.Dock="Top" Background="#111114" Padding="16,12">
-            <Grid>
-                <TextBlock x:Name="HeaderText" VerticalAlignment="Center"
-                           Foreground="#E6C067" FontSize="22" FontWeight="Bold"/>
-                <Button x:Name="PlayButton" Content="PLAY" Click="OnPlayClicked"
-                        HorizontalAlignment="Right" Width="170" Height="46"
-                        Background="#3B7D3B" Foreground="White" FontSize="18" FontWeight="Bold"
-                        BorderThickness="0"/>
-            </Grid>
-        </Border>
+  <Window.Resources>
+    <BooleanToVisibilityConverter x:Key="BoolToVis"/>
 
-        <!-- Status bar -->
-        <Border DockPanel.Dock="Bottom" Background="#111114" Padding="14,7">
-            <TextBlock x:Name="StatusText" Foreground="#9A9AA2" FontSize="12"/>
-        </Border>
+    <Style TargetType="{x:Type TextBlock}">
+      <Setter Property="Foreground" Value="#C8C8D0"/>
+      <Setter Property="FontSize" Value="14"/>
+    </Style>
+    <Style TargetType="{x:Type CheckBox}">
+      <Setter Property="Foreground" Value="#DADADD"/>
+      <Setter Property="Margin" Value="0,10,0,0"/>
+      <Setter Property="FontSize" Value="14"/>
+    </Style>
+    <Style TargetType="{x:Type TextBox}">
+      <Setter Property="Background" Value="#26262B"/>
+      <Setter Property="Foreground" Value="#EDEDED"/>
+      <Setter Property="BorderBrush" Value="#3A3A42"/>
+      <Setter Property="Padding" Value="5,4"/>
+      <Setter Property="CaretBrush" Value="#EDEDED"/>
+      <Setter Property="FontSize" Value="14"/>
+    </Style>
+    <Style TargetType="{x:Type PasswordBox}">
+      <Setter Property="Background" Value="#26262B"/>
+      <Setter Property="Foreground" Value="#EDEDED"/>
+      <Setter Property="BorderBrush" Value="#3A3A42"/>
+      <Setter Property="Padding" Value="5,4"/>
+      <Setter Property="CaretBrush" Value="#EDEDED"/>
+      <Setter Property="FontSize" Value="14"/>
+    </Style>
+    <!-- The app-wide Button style (App.xaml) covers this window too — no local override here. -->
+    <Style TargetType="{x:Type ListBox}">
+      <Setter Property="Background" Value="#101014"/>
+      <Setter Property="Foreground" Value="#DADADD"/>
+      <Setter Property="BorderBrush" Value="#3A3A42"/>
+      <Setter Property="FontSize" Value="13"/>
+    </Style>
 
-        <!-- Body -->
-        <TabControl Background="#1B1B1F" BorderThickness="0" Padding="0">
-            <TabItem Header="Patches">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="18">
-                        <TextBlock Text="Executable patches (rebuilt from a pristine backup, in fixed order)"
+    <!--
+      Custom window-control buttons (minimize/maximize/close): no background fill ever, same
+      treatment as the NavPanel radio buttons — only the glyph's Foreground changes on hover.
+      Close gets its own style so its hover color can be a soft red instead of white, the one
+      universally-expected exception to "no background" feedback.
+    -->
+    <Style x:Key="WindowControlButtonStyle" TargetType="{x:Type Button}">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#9A9AA2"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="FontFamily" Value="Segoe Fluent Icons"/>
+      <Setter Property="FontSize" Value="16"/>
+      <Setter Property="Width" Value="68"/>
+      <Setter Property="Height" Value="52"/>
+      <Setter Property="Cursor" Value="Arrow"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+      <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type Button}">
+            <Border Background="Transparent">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="White"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="WindowCloseButtonStyle" TargetType="{x:Type Button}">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#9A9AA2"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="FontFamily" Value="Segoe Fluent Icons"/>
+      <Setter Property="FontSize" Value="16"/>
+      <Setter Property="Width" Value="68"/>
+      <Setter Property="Height" Value="52"/>
+      <Setter Property="Cursor" Value="Arrow"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+      <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type Button}">
+            <Border Background="Transparent">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="#E5484D"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Modern flat scrollbars (thin, borderless track, rounded thumb) applied everywhere automatically. -->
+    <Style x:Key="ModernScrollBarThumb" TargetType="{x:Type Thumb}">
+      <Setter Property="Background" Value="#4A4A54"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type Thumb}">
+            <Border Background="{TemplateBinding Background}" CornerRadius="5" Margin="2"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="Background" Value="#5E5E6A"/>
+        </Trigger>
+        <Trigger Property="IsDragging" Value="True">
+          <Setter Property="Background" Value="#E6C067"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+    <Style x:Key="ModernScrollRepeatButton" TargetType="{x:Type RepeatButton}">
+      <Setter Property="Focusable" Value="False"/>
+      <Setter Property="IsTabStop" Value="False"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type RepeatButton}">
+            <Rectangle Fill="Transparent"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="{x:Type ScrollBar}">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Width" Value="10"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type ScrollBar}">
+            <Track x:Name="PART_Track" IsDirectionReversed="True" Orientation="Vertical">
+              <Track.DecreaseRepeatButton>
+                <RepeatButton Style="{StaticResource ModernScrollRepeatButton}" Command="ScrollBar.PageUpCommand"/>
+              </Track.DecreaseRepeatButton>
+              <Track.IncreaseRepeatButton>
+                <RepeatButton Style="{StaticResource ModernScrollRepeatButton}" Command="ScrollBar.PageDownCommand"/>
+              </Track.IncreaseRepeatButton>
+              <Track.Thumb>
+                <Thumb Style="{StaticResource ModernScrollBarThumb}"/>
+              </Track.Thumb>
+            </Track>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <Trigger Property="Orientation" Value="Horizontal">
+          <Setter Property="Width" Value="Auto"/>
+          <Setter Property="Height" Value="10"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="{x:Type ScrollBar}">
+                <Track x:Name="PART_Track" Orientation="Horizontal">
+                  <Track.DecreaseRepeatButton>
+                    <RepeatButton Style="{StaticResource ModernScrollRepeatButton}" Command="ScrollBar.PageLeftCommand"/>
+                  </Track.DecreaseRepeatButton>
+                  <Track.IncreaseRepeatButton>
+                    <RepeatButton Style="{StaticResource ModernScrollRepeatButton}" Command="ScrollBar.PageRightCommand"/>
+                  </Track.IncreaseRepeatButton>
+                  <Track.Thumb>
+                    <Thumb Style="{StaticResource ModernScrollBarThumb}"/>
+                  </Track.Thumb>
+                </Track>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
+    <!-- Tab headers are hidden; navigation is driven by the header-bar labels below instead. -->
+    <Style x:Key="HeaderlessTabControl" TargetType="{x:Type TabControl}">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type TabControl}">
+            <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- A nav "tab" rendered as a plain clickable label with a gold underline when active. -->
+    <Style x:Key="NavButtonStyle" TargetType="{x:Type RadioButton}">
+      <Setter Property="Foreground" Value="#9A9AA2"/>
+      <Setter Property="FontSize" Value="20"/>
+      <Setter Property="Margin" Value="16,0,0,0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type RadioButton}">
+            <Border x:Name="Bd" Padding="2,6" BorderThickness="0,0,0,2" BorderBrush="Transparent">
+              <ContentPresenter HorizontalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Bd" Property="BorderBrush" Value="#E6C067"/>
+                <Setter Property="Foreground" Value="#E6C067"/>
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="#DADADD"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!--
+      Compact preview mode for the Home tab's Readme/Changelog boxes: no internal scrollbar and no
+      zoom toolbar, since overflow is handled by clicking through to the full-size expand dialog
+      instead. This replaces the whole control template, so it's scoped to this window only — the
+      expand dialog defines its own (normally-scrolling) MarkdownViewer template.
+    -->
+    <Style x:Key="CompactMarkdownViewer" TargetType="{x:Type markdig:MarkdownViewer}">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type markdig:MarkdownViewer}">
+            <FlowDocumentScrollViewer Document="{TemplateBinding Document}"
+                                      VerticalScrollBarVisibility="Hidden"
+                                      HorizontalScrollBarVisibility="Hidden"
+                                      IsToolBarVisible="False"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+
+  <Window.CommandBindings>
+    <CommandBinding Command="{x:Static markdig:Commands.Hyperlink}" Executed="OnMarkdownHyperlink"/>
+  </Window.CommandBindings>
+
+  <DockPanel>
+    <!-- Header: title + window controls share one row (flush to the top-right corner, no gap
+         above it), nav labels centered on the row below. The empty space around the centered
+         title in row 0 is still draggable/double-click-to-maximize, since it's within
+         WindowChrome's CaptionHeight (kept equal to this row's fixed height) and doesn't opt out
+         via IsHitTestVisibleInChrome — only the three buttons do. -->
+    <Border DockPanel.Dock="Top" Background="#111114">
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="52"/>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+          <TextBlock x:Name="HeaderText" HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                     Foreground="#E6C067" FontSize="30" FontWeight="Bold" TextAlignment="Center"/>
+          <TextBlock x:Name="VersionLabel" HorizontalAlignment="Left" VerticalAlignment="Center"
+                     Margin="16,0,0,0" Foreground="#6E6E76" FontSize="11"/>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Stretch">
+            <Button Style="{StaticResource WindowControlButtonStyle}" Content="&#xE921;"
+                    Click="OnMinimizeClicked" ToolTip="Minimize"/>
+            <Button x:Name="MaximizeRestoreButton" Style="{StaticResource WindowControlButtonStyle}" Content="&#xE922;"
+                    Click="OnMaximizeRestoreClicked" ToolTip="Maximize"/>
+            <Button Style="{StaticResource WindowCloseButtonStyle}" Content="&#xE8BB;"
+                    Click="OnCloseClicked" ToolTip="Close"/>
+          </StackPanel>
+        </Grid>
+
+        <StackPanel Grid.Row="1" x:Name="NavPanel" Orientation="Horizontal"
+                    HorizontalAlignment="Center" Margin="16,0,16,12">
+          <RadioButton Style="{StaticResource NavButtonStyle}" GroupName="Nav" Tag="0"
+                                 Content="Home" Click="OnNavClicked" IsChecked="True" Margin="0"/>
+          <RadioButton Style="{StaticResource NavButtonStyle}" GroupName="Nav" Tag="1"
+                                 Content="Tweaks" Click="OnNavClicked"/>
+          <RadioButton Style="{StaticResource NavButtonStyle}" GroupName="Nav" Tag="2"
+                                 Content="DLLs" Click="OnNavClicked"/>
+          <RadioButton Style="{StaticResource NavButtonStyle}" GroupName="Nav" Tag="3"
+                                 Content="MPQ Patches" Click="OnNavClicked"/>
+          <RadioButton Style="{StaticResource NavButtonStyle}" GroupName="Nav" Tag="4"
+                                 Content="Addons" Click="OnNavClicked"/>
+          <RadioButton Style="{StaticResource NavButtonStyle}" GroupName="Nav" Tag="5"
+                                 Content="Settings" Click="OnNavClicked"/>
+          <RadioButton Style="{StaticResource NavButtonStyle}" GroupName="Nav" Tag="6"
+                                 Content="Log" Click="OnNavClicked"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- Footer: status + progress bar, and the Play/Install/Update button -->
+    <Border DockPanel.Dock="Bottom" Background="#111114" Padding="16,10">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+
+        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+          <TextBlock x:Name="StatusText" Foreground="#9A9AA2" FontSize="12" Margin="0,0,0,4"/>
+          <ProgressBar x:Name="MainProgressBar" Height="10" Minimum="0" Maximum="100"
+                                 Background="#101014" Foreground="#3B7D3B" BorderBrush="#3A3A42"
+                                 BorderThickness="1" Visibility="Collapsed"/>
+        </StackPanel>
+
+        <Button Grid.Column="1" x:Name="PlayButton" Content="PLAY" Click="OnPlayClicked"
+                        Width="170" Height="46" Background="#3B7D3B" Foreground="White" FontSize="18"
+                        FontWeight="Bold" BorderThickness="0" Margin="5, 10, 5, 10"/>
+      </Grid>
+    </Border>
+
+    <!-- Body -->
+    <TabControl x:Name="MainTabs" Style="{StaticResource HeaderlessTabControl}"
+                    Background="#1B1B1F" BorderThickness="0" Padding="0" SelectedIndex="0">
+
+      <!-- 0: Home (Login & Game) -->
+      <TabItem d:IsHidden="True">
+        <Grid Margin="24">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+
+          <!-- Left: How to use. Fills the column's real height (no outer page scroll here), split
+               evenly between the two previews. Each preview clips rather than scrolling internally —
+               click anywhere on one to open it full-size in a dedicated dialog. -->
+          <Grid Grid.Column="0" Margin="0,0,20,0">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0" Text="How to use" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,16"/>
+
+            <TextBlock Grid.Row="1" Text="Readme" FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <Border Grid.Row="2" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6"
+                    Padding="12" Margin="0,0,0,20" Cursor="Hand" Tag="Readme" MouseLeftButtonUp="OnExpandMarkdown">
+              <markdig:MarkdownViewer x:Name="ReadmeViewer" Style="{StaticResource CompactMarkdownViewer}"
+                                       IsHitTestVisible="False"/>
+            </Border>
+
+            <TextBlock Grid.Row="3" Text="Changelog" FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <Border Grid.Row="4" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6"
+                    Padding="12" Cursor="Hand" Tag="Changelog" MouseLeftButtonUp="OnExpandMarkdown">
+              <markdig:MarkdownViewer x:Name="ChangelogViewer" Style="{StaticResource CompactMarkdownViewer}"
+                                       IsHitTestVisible="False"/>
+            </Border>
+          </Grid>
+
+          <!-- Right: Login -->
+          <Grid Grid.Column="1" Margin="20,0,0,0">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <DockPanel Grid.Row="0" Margin="0,0,0,20" LastChildFill="False">
+              <TextBlock DockPanel.Dock="Left" Text="Login" FontSize="18" FontWeight="SemiBold"/>
+              <TextBlock DockPanel.Dock="Right" x:Name="RealmlistLabel"
+                                       Text="Realmlist: (not set)" Foreground="#8A8A92" FontSize="12"
+                                       VerticalAlignment="Center" Cursor="Hand" TextDecorations="Underline"
+                                       MouseLeftButtonUp="OnRealmlistLabelClicked"/>
+            </DockPanel>
+
+            <StackPanel Grid.Row="1" MaxWidth="420" HorizontalAlignment="Left">
+              <CheckBox x:Name="AutoLoginCheck" Content="Enable auto-login" Margin="0"/>
+
+              <TextBlock Text="Account" Margin="0,16,0,4"/>
+              <TextBox x:Name="AccountBox"/>
+
+              <TextBlock Text="Password" Margin="0,12,0,4"/>
+              <PasswordBox x:Name="PasswordBoxInput"/>
+              <CheckBox x:Name="SavePasswordCheck"
+                                      Content="Remember password (encrypted on this PC with Windows DPAPI)"/>
+            </StackPanel>
+          </Grid>
+        </Grid>
+      </TabItem>
+
+      <!-- 1: Tweaks (executable patches) -->
+      <TabItem d:IsHidden="True">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="18">
+            <TextBlock Text="Executable tweaks (rebuilt from a pristine backup, in fixed order)"
                                    FontWeight="SemiBold" Margin="0,0,0,4"/>
-                        <TextBlock Text="1. Signature Removal → 2. VanillaTweaks. Toggling or adjusting any patch rebuilds WoW.exe from the untouched backup."
+            <TextBlock Text="1. Signature Removal → 2. VanillaTweaks. Toggling or adjusting any tweak rebuilds WoW.exe from the untouched backup, as soon as you change it."
                                    Foreground="#8A8A92" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                        <StackPanel x:Name="PatchesPanel"/>
-                    </StackPanel>
-                </ScrollViewer>
-            </TabItem>
+            <StackPanel x:Name="PatchesPanel"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
 
-            <TabItem Header="DLLs">
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <StackPanel Grid.Row="0" Margin="0,0,0,8">
-                        <TextBlock Text="DLLs injected on launch (dlls.txt, load order top → bottom)" FontWeight="SemiBold"/>
-                        <TextBlock Text="Add DLLs placed in the game folder. Only files that exist are injected."
+      <!-- 2: DLLs -->
+      <TabItem d:IsHidden="True">
+        <Grid Margin="16">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+
+          <StackPanel Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock Text="DLLs injected on launch (dlls.txt, load order top → bottom)" FontWeight="SemiBold"/>
+            <TextBlock Text="Only files that exist are injected." Foreground="#8A8A92" FontSize="11"/>
+          </StackPanel>
+          <ListBox Grid.Row="1" x:Name="DllList"/>
+          <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnAddDll"
+                    ToolTip="Add a DLL to inject"/>
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE74D;" Click="OnRemoveDll" Margin="8,0,0,0"
+                    ToolTip="Remove the selected DLL"/>
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE70E;" Click="OnMoveDllUp" Margin="8,0,0,0"
+                    ToolTip="Move up in load order"/>
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE70D;" Click="OnMoveDllDown" Margin="8,0,0,0"
+                    ToolTip="Move down in load order"/>
+          </StackPanel>
+
+          <StackPanel Grid.Row="3" Margin="0,16,0,4">
+            <TextBlock Text="Detected in game folder (not tracked)" FontWeight="SemiBold"/>
+            <TextBlock Text="DLLs found directly in the game folder that aren't in dlls.txt yet."
                                    Foreground="#8A8A92" FontSize="11"/>
-                    </StackPanel>
-                    <ListBox Grid.Row="1" x:Name="DllList"/>
-                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
-                        <Button Content="Add DLL…" Click="OnAddDll"/>
-                        <Button Content="Remove" Click="OnRemoveDll" Margin="8,0,0,0"/>
-                        <Button Content="Move Up" Click="OnMoveDllUp" Margin="8,0,0,0"/>
-                        <Button Content="Move Down" Click="OnMoveDllDown" Margin="8,0,0,0"/>
-                    </StackPanel>
-                </Grid>
-            </TabItem>
+          </StackPanel>
+          <ListBox Grid.Row="4" x:Name="DetectedDllList" SelectionMode="Extended"/>
+          <StackPanel Grid.Row="5" Orientation="Horizontal" Margin="0,8,0,0">
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshDetectedDlls"
+                    ToolTip="Rescan the game folder for new DLLs"/>
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnAddDetectedDlls" Margin="8,0,0,0"
+                    ToolTip="Start tracking the selected DLL(s)"/>
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xED1A;" Click="OnIgnoreDetectedDlls" Margin="8,0,0,0"
+                    ToolTip="Ignore the selected DLL(s) (won't be suggested again)"/>
+          </StackPanel>
+        </Grid>
+      </TabItem>
 
-            <TabItem Header="MPQ Patches">
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <StackPanel Grid.Row="0" Margin="0,0,0,8">
-                        <TextBlock Text="Custom MPQ patches in Data\ (patch-A.mpq … patch-Z.mpq)" FontWeight="SemiBold"/>
-                        <TextBlock Text="Uncheck to disable (renames to _patch-X.mpq). Base Blizzard patches are not shown."
+      <!-- 3: MPQ Patches -->
+      <TabItem d:IsHidden="True">
+        <Grid Margin="16">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+          <StackPanel Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock Text="Custom MPQ patches in Data\ (patch-A.mpq … patch-Z.mpq)" FontWeight="SemiBold"/>
+            <TextBlock Text="Uncheck to disable (renames to _patch-X.mpq). Base Blizzard patches are not shown."
                                    Foreground="#8A8A92" FontSize="11"/>
-                    </StackPanel>
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                        <StackPanel x:Name="MpqPanel"/>
-                    </ScrollViewer>
-                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
-                        <Button Content="Add MPQ…" Click="OnAddMpq"/>
-                        <Button Content="Refresh" Click="OnRefreshMpq" Margin="8,0,0,0"/>
-                    </StackPanel>
-                </Grid>
-            </TabItem>
+          </StackPanel>
+          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnAddMpq"
+                    ToolTip="Add a custom MPQ patch"/>
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshMpq" Margin="8,0,0,0"
+                    ToolTip="Rescan Data\ for custom MPQ patches"/>
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE73A;" Click="OnSelectAllMpq" Margin="8,0,0,0"
+                    ToolTip="Enable all patches"/>
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE711;" Click="OnDeselectAllMpq" Margin="8,0,0,0"
+                    ToolTip="Disable all patches"/>
+          </StackPanel>
+          <Border Grid.Row="2" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="8">
+              <StackPanel x:Name="MpqPanel"/>
+            </ScrollViewer>
+          </Border>
+        </Grid>
+      </TabItem>
 
-            <TabItem Header="Addons">
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <StackPanel Grid.Row="0" Margin="0,0,0,8">
-                        <TextBlock Text="Addons (installed into Interface\AddOns)" FontWeight="SemiBold"/>
-                        <TextBlock Text="Add by GitHub repo URL, a direct .zip URL, or a local .zip file."
+      <!-- 4: Addons -->
+      <TabItem d:IsHidden="True">
+        <Grid Margin="16">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+          <StackPanel Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock Text="Addons (installed into Interface\AddOns)" FontWeight="SemiBold"/>
+            <TextBlock Text="Add by GitHub repo URL, a direct archive URL, or a local .zip/.rar/.7z file."
                                    Foreground="#8A8A92" FontSize="11"/>
-                    </StackPanel>
-                    <DockPanel Grid.Row="1" Margin="0,0,0,8">
-                        <Button DockPanel.Dock="Right" Content="Add from file…" Click="OnAddAddonFromFile" Margin="8,0,0,0"/>
-                        <Button DockPanel.Dock="Right" Content="Add from URL" Click="OnAddAddonFromUrl" Margin="8,0,0,0"/>
-                        <TextBox x:Name="AddonUrlBox"/>
-                    </DockPanel>
-                    <ListBox Grid.Row="2" x:Name="AddonList" DisplayMemberPath="Display"/>
-                    <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,8,0,0">
-                        <Button Content="Remove selected" Click="OnRemoveAddon"/>
-                        <Button Content="Update selected" Click="OnUpdateAddon" Margin="8,0,0,0"/>
-                        <Button Content="Refresh" Click="OnRefreshAddons" Margin="8,0,0,0"/>
-                        <TextBlock x:Name="AddonStatusText" Foreground="#8A8A92" VerticalAlignment="Center" Margin="12,0,0,0"/>
-                    </StackPanel>
+          </StackPanel>
+
+          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnOpenAddAddonDialog"
+                    ToolTip="Add an addon"/>
+            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshAddons" Margin="8,0,0,0"
+                    ToolTip="Refresh: reload, adopt local addons, and check for updates"/>
+            <TextBlock x:Name="AddonStatusText" Foreground="#8A8A92" VerticalAlignment="Center" Margin="12,0,0,0"/>
+          </StackPanel>
+
+          <ListBox Grid.Row="2" x:Name="AddonList" HorizontalContentAlignment="Stretch">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <Grid Margin="0,4">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+
+                  <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock svc:WowColoredText.Text="{Binding Name}" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding VersionDisplay}" Foreground="#8A8A92" FontSize="12"
+                               Margin="8,0,0,0" VerticalAlignment="Center"/>
+                  </StackPanel>
+
+                  <Button Grid.Column="1" Style="{StaticResource IconButtonStyle}" Content="&#xE896;"
+                          Tag="{Binding}" Click="OnUpdateAddonClick" ToolTip="Update this addon"
+                          Visibility="{Binding HasUpdateAvailable, Converter={StaticResource BoolToVis}}"
+                          Margin="8,0,0,0" Width="28" Height="28" Background="#2E6DA4"/>
+                  <Button Grid.Column="2" Style="{StaticResource IconButtonStyle}" Content="&#xE74D;"
+                          Tag="{Binding}" Click="OnRemoveAddonClick" ToolTip="Remove this addon"
+                          Margin="8,0,0,0" Width="28" Height="28"/>
                 </Grid>
-            </TabItem>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Grid>
+      </TabItem>
 
-            <TabItem Header="Install / Update">
-                <Grid Margin="18">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
+      <!-- 5: Settings -->
+      <TabItem d:IsHidden="True">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="24" MaxWidth="620" HorizontalAlignment="Left">
+            <TextBlock Text="Installation directory" FontWeight="SemiBold"/>
+            <TextBlock Text="The folder containing WoW.exe. If you moved your install, browse to the new location."
+                                   Foreground="#8A8A92" FontSize="11" Margin="0,0,0,4" TextWrapping="Wrap"/>
+            <DockPanel Margin="0,4,0,6">
+              <Button DockPanel.Dock="Right" Style="{StaticResource IconButtonStyle}" Content="&#xE8B7;"
+                      Margin="8,0,0,0" Click="OnBrowseGameFolder" ToolTip="Browse for the game folder"/>
+              <TextBox x:Name="GameFolderBox"/>
+            </DockPanel>
+            <TextBlock x:Name="GameFolderHint" Foreground="#8A8A92" FontSize="11" Margin="0,0,0,16"/>
 
-                    <StackPanel Grid.Row="0" Margin="0,0,0,12" MaxWidth="660" HorizontalAlignment="Left">
-                        <TextBlock Text="Download &amp; install the vanilla 1.12.1 client" FontWeight="SemiBold"/>
-                        <TextBlock Text="The whole base client is a single download. The folder you pick becomes your WoW home directory."
-                                   Foreground="#8A8A92" FontSize="11" TextWrapping="Wrap"/>
-                    </StackPanel>
+            <Button Content="Repair Game Files" Click="OnRepairGameFiles"
+                                HorizontalAlignment="Left" Margin="0,0,0,4"/>
+            <TextBlock Foreground="#8A8A92" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,20" MaxWidth="600"
+                                   Text="Re-downloads and reinstalls the full client from the source URL below, overwriting any file that differs. There is no per-file update list for this client, so this always refreshes the whole install."/>
 
-                    <StackPanel Grid.Row="1" MaxWidth="660" HorizontalAlignment="Left">
-                        <TextBlock Text="Install folder"/>
-                        <DockPanel Margin="0,4,0,6">
-                            <Button DockPanel.Dock="Right" Content="Browse…" Width="90" Margin="8,0,0,0"
-                                    Click="OnBrowseInstallFolder"/>
-                            <TextBox x:Name="InstallFolderBox"/>
-                        </DockPanel>
-                    </StackPanel>
+            <TextBlock Text="Realmlist (any private vanilla server, e.g. logon.myserver.com)"/>
+            <TextBox x:Name="RealmlistBox" Margin="0,4,0,20"/>
 
-                    <TextBlock Grid.Row="2" x:Name="InstallStatusText" Foreground="#8A8A92" FontSize="11"
-                               Margin="0,0,0,10" MaxWidth="660" HorizontalAlignment="Left" TextWrapping="Wrap"/>
+            <TextBlock Text="Client download URL (advanced — override for another server's client zip)"/>
+            <TextBox x:Name="ClientUrlBox" Margin="0,4,0,20"/>
 
-                    <StackPanel Grid.Row="3" MaxWidth="660" HorizontalAlignment="Left" Margin="0,0,0,10">
-                        <TextBlock Text="Client download URL (advanced — override for another server's client zip)"/>
-                        <TextBox x:Name="ClientUrlBox" Margin="0,4,0,0"/>
-                    </StackPanel>
+            <TextBlock Text="Login delay after the game window appears (ms)"/>
+            <TextBox x:Name="DelayBox" Width="130" HorizontalAlignment="Left" Margin="0,4,0,20"/>
 
-                    <ProgressBar Grid.Row="4" x:Name="InstallProgressBar" Height="18" Minimum="0" Maximum="100"
-                                 MaxWidth="660" HorizontalAlignment="Left" Margin="0,0,0,10"
-                                 Background="#101014" Foreground="#3B7D3B" BorderBrush="#3A3A42"/>
+            <TextBlock Text="Ignored DLLs" FontWeight="SemiBold"/>
+            <TextBlock Text="DLLs hidden from the DLLs tab's &quot;Detected in game folder&quot; list (e.g. files that aren't actually meant for injection). Un-ignore to make them detectable again."
+                       Foreground="#8A8A92" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6" MaxWidth="600"/>
+            <ListBox x:Name="IgnoredDllList" Height="100" Margin="0,0,0,6"/>
+            <Button Content="Un-ignore Selected" Click="OnUnignoreDlls"
+                    HorizontalAlignment="Left"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
 
-                    <StackPanel Grid.Row="5" Orientation="Horizontal">
-                        <Button x:Name="InstallButton" Content="Download / Install" Click="OnInstallClicked"/>
-                        <Button x:Name="CancelInstallButton" Content="Cancel" Click="OnCancelInstall"
-                                Margin="8,0,0,0" IsEnabled="False"/>
-                    </StackPanel>
-                </Grid>
-            </TabItem>
-
-            <TabItem Header="Login &amp; Game">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="18" MaxWidth="580" HorizontalAlignment="Left">
-                        <TextBlock Text="Game folder (the folder that contains WoW.exe)"/>
-                        <DockPanel Margin="0,4,0,6">
-                            <Button DockPanel.Dock="Right" Content="Browse…" Width="90" Margin="8,0,0,0"
-                                    Click="OnBrowseGameFolder"/>
-                            <TextBox x:Name="GameFolderBox"/>
-                        </DockPanel>
-                        <TextBlock x:Name="GameFolderHint" Foreground="#8A8A92" FontSize="11"/>
-
-                        <CheckBox x:Name="AutoLoginCheck" Content="Enable auto-login" Margin="0,18,0,0"/>
-
-                        <TextBlock Text="Account" Margin="0,14,0,4"/>
-                        <TextBox x:Name="AccountBox"/>
-
-                        <TextBlock Text="Password" Margin="0,12,0,4"/>
-                        <PasswordBox x:Name="PasswordBoxInput"/>
-                        <CheckBox x:Name="SavePasswordCheck"
-                                  Content="Remember password (encrypted on this PC with Windows DPAPI)"/>
-
-                        <TextBlock Text="Login delay after the game window appears (ms)" Margin="0,14,0,4"/>
-                        <TextBox x:Name="DelayBox" Width="130" HorizontalAlignment="Left"/>
-
-                        <TextBlock Text="Realmlist (any private vanilla server, e.g. logon.myserver.com)" Margin="0,14,0,4"/>
-                        <TextBox x:Name="RealmlistBox"/>
-
-                        <Button Content="Save settings" Click="OnSaveSettings"
-                                Width="130" HorizontalAlignment="Left" Margin="0,18,0,0"/>
-                    </StackPanel>
-                </ScrollViewer>
-            </TabItem>
-
-            <TabItem Header="Log">
-                <Border Background="#101014" Margin="8">
-                    <TextBox x:Name="LogBox" IsReadOnly="True" Background="Transparent" Foreground="#C8C8D0"
+      <!-- 6: Log -->
+      <TabItem>
+        <Border Background="#101014" Margin="8">
+          <TextBox x:Name="LogBox" IsReadOnly="True" Background="Transparent" Foreground="#C8C8D0"
                              BorderThickness="0" FontFamily="Consolas" FontSize="12"
                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                              TextWrapping="NoWrap"/>
-                </Border>
-            </TabItem>
-        </TabControl>
-    </DockPanel>
+        </Border>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
 </Window>

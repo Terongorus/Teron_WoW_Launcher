@@ -24,6 +24,11 @@ public sealed class LaunchOrchestrator
     private readonly DllListService _dlls = new();
     private readonly GameInjector _injector = new();
     private readonly AutoLoginService _autoLogin = new();
+    private readonly GameProcessService _processCheck = new();
+
+    // Serializes every executable-patch rebuild (Play and apply-on-change both go through this),
+    // so overlapping calls can never race on the same temp file or on WoW.exe itself.
+    private readonly SemaphoreSlim _patchGate = new(1, 1);
 
     public LaunchOrchestrator(SettingsService settings) => _settings = settings;
 
@@ -47,7 +52,7 @@ public sealed class LaunchOrchestrator
         // 1-2. Executable patches, always rebuilt from the pristine backup so order is guaranteed.
         try
         {
-            SyncExecutablePatches(wowDir, Report);
+            await SyncExecutablePatchesGuardedAsync(wowDir, Report);
         }
         catch (Exception ex)
         {
@@ -102,21 +107,42 @@ public sealed class LaunchOrchestrator
             return;
         }
 
-        await Task.Run(() =>
+        try
         {
-            try
+            await SyncExecutablePatchesGuardedAsync(wowDir, message =>
             {
-                SyncExecutablePatches(wowDir, message =>
-                {
-                    _log.Info(message);
-                    progress?.Report(message);
-                });
-            }
-            catch (Exception ex)
+                _log.Info(message);
+                progress?.Report(message);
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Applying patches failed.", ex);
+        }
+    }
+
+    /// <summary>
+    /// Runs <see cref="SyncExecutablePatches"/> off the UI thread, serialized against every other
+    /// caller (Play and apply-on-change alike) via <see cref="_patchGate"/>, and skips cleanly
+    /// instead of throwing when the game is currently running (WoW.exe would be locked).
+    /// </summary>
+    private async Task SyncExecutablePatchesGuardedAsync(string wowDir, Action<string> report)
+    {
+        await _patchGate.WaitAsync();
+        try
+        {
+            if (_processCheck.IsRunning(wowDir))
             {
-                _log.Error("Applying patches failed.", ex);
+                report("WoW is currently running — close the game to apply executable patch changes.");
+                return;
             }
-        });
+
+            await Task.Run(() => SyncExecutablePatches(wowDir, report));
+        }
+        finally
+        {
+            _patchGate.Release();
+        }
     }
 
     private void SyncExecutablePatches(string wowDir, Action<string> report)

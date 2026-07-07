@@ -1,15 +1,23 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Globalization;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
+using Markdig.Wpf;
 using Microsoft.Win32;
+using TeronWoWLauncher.Dialogs;
 using TeronWoWLauncher.Models;
 using TeronWoWLauncher.Services;
 
@@ -17,6 +25,8 @@ namespace TeronWoWLauncher;
 
 public partial class MainWindow : Window
 {
+    private enum PlayButtonState { Play, Install, Update }
+
     private readonly Logger _log = Logger.Instance;
     private readonly SettingsService _settings = new();
     private readonly LaunchOrchestrator _orchestrator;
@@ -24,18 +34,47 @@ public partial class MainWindow : Window
     private readonly MpqPatchService _mpq = new();
     private readonly RealmlistService _realmlist = new();
     private readonly GameInstallService _install = new();
-    private CancellationTokenSource? _installCts;
     private readonly AddonLibrary _addons = new();
-    private readonly ObservableCollection<InstalledAddon> _addonItems = new();
-    private bool _addonBusy;
 
     private readonly List<PatchControl> _patchControls = new();
     private readonly ObservableCollection<string> _dllItems = new();
+    private readonly ObservableCollection<string> _detectedDllItems = new();
+    private readonly ObservableCollection<string> _ignoredDllItems = new();
+    private readonly ObservableCollection<InstalledAddon> _addonItems = new();
+
     private readonly DispatcherTimer _patchApplyTimer = new() { Interval = TimeSpan.FromMilliseconds(600) };
+    private readonly DispatcherTimer _settingsSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
     private bool _loading;
     private bool _applyingPatches;
+    private bool _savingSettings;
+    private bool _addonBusy;
+
+    // Last values a settings-save actually acted on, so retyping the same folder/URL/realmlist
+    // doesn't re-trigger the heavier side effects (folder rescans, a network update check) every tick.
+    private string _lastAppliedWowDir = string.Empty;
+    private string _lastAppliedRealmlist = string.Empty;
+    private string _lastAppliedClientUrl = string.Empty;
+
+    private PlayButtonState _playState = PlayButtonState.Play;
+    private UpdateCheckResult? _pendingUpdateCheck;
 
     private static readonly Brush MutedBrush = new SolidColorBrush(Color.FromRgb(0x8A, 0x8A, 0x92));
+    private static readonly Brush PlayColor = new SolidColorBrush(Color.FromRgb(0x3B, 0x7D, 0x3B));
+    private static readonly Brush InstallColor = new SolidColorBrush(Color.FromRgb(0x2E, 0x6D, 0xA4));
+    private static readonly Brush UpdateColor = new SolidColorBrush(Color.FromRgb(0xC9, 0x92, 0x2B));
+
+    // "HEAD" resolves to whichever branch GitHub reports as the repo's default, so this always
+    // reflects what's actually published there rather than a hardcoded branch name.
+    private const string ReadmeUrl = "https://raw.githubusercontent.com/Terongorus/Teron_WoW_Launcher/HEAD/README.md";
+    private const string ChangelogUrl = "https://raw.githubusercontent.com/Terongorus/Teron_WoW_Launcher/HEAD/CHANGELOG.md";
+    private static readonly HttpClient DocsHttp = CreateDocsHttpClient();
+
+    private static HttpClient CreateDocsHttpClient()
+    {
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("TeronWoWLauncher");
+        return http;
+    }
 
     private sealed class PatchControl
     {
@@ -50,28 +89,235 @@ public partial class MainWindow : Window
 
         Title = AppInfo.DisplayNameWithVersion;
         HeaderText.Text = AppInfo.DisplayName;
+        VersionLabel.Text = $"v{AppInfo.Version}";
+        StateChanged += OnWindowStateChanged;
+        Closing += OnWindowClosing;
 
         _settings.Load();
+        RestoreWindowPlacement();
         _orchestrator = new LaunchOrchestrator(_settings);
         _log.MessageLogged += OnMessageLogged;
         _patchApplyTimer.Tick += OnPatchApplyTick;
+        _settingsSaveTimer.Tick += OnSettingsSaveTick;
 
         DllList.ItemsSource = _dllItems;
+        DetectedDllList.ItemsSource = _detectedDllItems;
+        IgnoredDllList.ItemsSource = _ignoredDllItems;
+
+        // Save on any change instead of a Save button — CollectSettingsFromUi() validates each field
+        // (bad numbers/URLs keep the last good value) before anything is persisted.
+        AutoLoginCheck.Checked += (_, _) => ScheduleSettingsSave();
+        AutoLoginCheck.Unchecked += (_, _) => ScheduleSettingsSave();
+        AccountBox.TextChanged += (_, _) => ScheduleSettingsSave();
+        PasswordBoxInput.PasswordChanged += (_, _) => ScheduleSettingsSave();
+        SavePasswordCheck.Checked += (_, _) => ScheduleSettingsSave();
+        SavePasswordCheck.Unchecked += (_, _) => ScheduleSettingsSave();
+        GameFolderBox.TextChanged += (_, _) => ScheduleSettingsSave();
+        RealmlistBox.TextChanged += (_, _) => ScheduleSettingsSave();
+        ClientUrlBox.TextChanged += (_, _) => ScheduleSettingsSave();
+        DelayBox.TextChanged += (_, _) => ScheduleSettingsSave();
 
         _loading = true;
         BuildPatchList();
         LoadSettingsIntoUi();
         RefreshDllList();
+        RefreshDetectedDlls();
+        RefreshIgnoredDllList();
         RefreshMpqList();
-        InitInstallTab();
         InitAddonsTab();
         _loading = false;
 
+        _lastAppliedWowDir = CurrentWowDir();
+        _lastAppliedRealmlist = _settings.Current.Realmlist;
+        _lastAppliedClientUrl = CurrentClientUrl();
+
         UpdateStatus("Ready.");
         _log.Info("Launcher UI initialized.");
+
+        _ = RefreshPlayButtonStateAsync();
+        _ = LoadDocsFromGitHubAsync();
     }
 
-    // ---------------- Patches tab ----------------
+    // ---------------- Custom title bar ----------------
+
+    private void OnMinimizeClicked(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    private void OnMaximizeRestoreClicked(object sender, RoutedEventArgs e)
+        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    private void OnCloseClicked(object sender, RoutedEventArgs e) => Close();
+
+    private void OnWindowStateChanged(object? sender, EventArgs e)
+    {
+        bool maximized = WindowState == WindowState.Maximized;
+        MaximizeRestoreButton.Content = maximized ? "" : ""; // ChromeRestore / ChromeMaximize
+        MaximizeRestoreButton.ToolTip = maximized ? "Restore" : "Maximize";
+    }
+
+    /// <summary>Applies the saved size/position/state, if any and still sane, before the window is shown.</summary>
+    private void RestoreWindowPlacement()
+    {
+        LauncherSettings s = _settings.Current;
+
+        if (s.WindowWidth is double w && s.WindowHeight is double h && w > 0 && h > 0)
+        {
+            Width = w;
+            Height = h;
+        }
+
+        // Only trust a saved position if the window would still land on a currently-connected
+        // monitor -- otherwise a since-removed second monitor could strand it off-screen forever.
+        if (s.WindowLeft is double l && s.WindowTop is double t && IsOnVirtualScreen(l, t, Width, Height))
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = l;
+            Top = t;
+        }
+
+        if (Enum.TryParse(s.SavedWindowState, out WindowState savedState))
+        {
+            WindowState = savedState;
+        }
+    }
+
+    private static bool IsOnVirtualScreen(double left, double top, double width, double height)
+    {
+        double screenLeft = SystemParameters.VirtualScreenLeft;
+        double screenTop = SystemParameters.VirtualScreenTop;
+        double screenRight = screenLeft + SystemParameters.VirtualScreenWidth;
+        double screenBottom = screenTop + SystemParameters.VirtualScreenHeight;
+        return left < screenRight && left + width > screenLeft && top < screenBottom && top + height > screenTop;
+    }
+
+    /// <summary>
+    /// Saves size/position/state for next launch. Uses RestoreBounds (the Normal-state bounds)
+    /// rather than the current Width/Height/Left/Top whenever the window is not Normal right now,
+    /// so maximizing or minimizing does not overwrite the size it should restore back to.
+    /// </summary>
+    private void OnWindowClosing(object? sender, CancelEventArgs e)
+    {
+        LauncherSettings s = _settings.Current;
+        Rect bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+
+        if (bounds.Width > 0 && bounds.Height > 0)
+        {
+            s.WindowLeft = bounds.Left;
+            s.WindowTop = bounds.Top;
+            s.WindowWidth = bounds.Width;
+            s.WindowHeight = bounds.Height;
+        }
+
+        s.SavedWindowState = WindowState.ToString();
+        _settings.Save();
+    }
+
+    // ---------------- Home tab: How to use (README/CHANGELOG from GitHub, rendered as Markdown) ----------------
+
+    private async Task LoadDocsFromGitHubAsync()
+    {
+        await Task.WhenAll(
+            LoadDocAsync(ReadmeUrl, ReadmeViewer),
+            LoadDocAsync(ChangelogUrl, ChangelogViewer));
+    }
+
+    private async Task LoadDocAsync(string url, MarkdownViewer target)
+    {
+        target.Markdown = "Loading from GitHub…";
+        try
+        {
+            target.Markdown = await DocsHttp.GetStringAsync(url);
+        }
+        catch (Exception ex)
+        {
+            target.Markdown = "Could not load this from GitHub right now.";
+            _log.Warn($"Failed to load {url}: {ex.Message}");
+        }
+    }
+
+    private void OnMarkdownHyperlink(object sender, ExecutedRoutedEventArgs e)
+    {
+        string? url = e.Parameter?.ToString();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"Failed to open link {url}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The Home tab's Readme/Changelog boxes are compact previews with no internal scrollbar; clicking
+    /// anywhere on one (the MarkdownViewer itself is hit-test-invisible so the Border always catches it)
+    /// opens the same content full-size, with normal scrolling, in its own dialog.
+    /// </summary>
+    private void OnExpandMarkdown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string kind })
+        {
+            return;
+        }
+
+        (string title, string markdown) = kind switch
+        {
+            "Readme" => ("README", ReadmeViewer.Markdown ?? string.Empty),
+            "Changelog" => ("CHANGELOG", ChangelogViewer.Markdown ?? string.Empty),
+            _ => (kind, string.Empty),
+        };
+
+        new MarkdownPreviewDialog(title, markdown) { Owner = this }.ShowDialog();
+    }
+
+    // ---------------- Navigation ----------------
+
+    private void OnNavClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is RadioButton { Tag: string tag } && int.TryParse(tag, out int index))
+        {
+            MainTabs.SelectedIndex = index;
+        }
+    }
+
+    private void SelectTab(int index)
+    {
+        MainTabs.SelectedIndex = index;
+        if (NavPanel.Children.Count > index && NavPanel.Children[index] is RadioButton rb)
+        {
+            rb.IsChecked = true;
+        }
+    }
+
+    private void OnRealmlistLabelClicked(object sender, MouseButtonEventArgs e)
+    {
+        SelectTab(5); // Settings
+        RealmlistBox.Focus();
+        RealmlistBox.SelectAll();
+        FlashHighlight(RealmlistBox);
+    }
+
+    /// <summary>Briefly flashes a control's border gold then fades it back, to draw the eye to it.</summary>
+    private static void FlashHighlight(Control control)
+    {
+        var brush = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42));
+        control.BorderBrush = brush; // a local instance, so the animation doesn't touch the shared Style brush
+
+        var animation = new ColorAnimation
+        {
+            From = Color.FromRgb(0xE6, 0xC0, 0x67),
+            To = Color.FromRgb(0x3A, 0x3A, 0x42),
+            Duration = TimeSpan.FromMilliseconds(900),
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+        };
+        brush.BeginAnimation(SolidColorBrush.ColorProperty, animation);
+    }
+
+    // ---------------- Tweaks tab ----------------
 
     private void BuildPatchList()
     {
@@ -154,7 +400,7 @@ public partial class MainWindow : Window
 
         if (catalog.Count == 0)
         {
-            PatchesPanel.Children.Add(new TextBlock { Text = "No executable patches available yet.", Foreground = MutedBrush });
+            PatchesPanel.Children.Add(new TextBlock { Text = "No executable tweaks available yet.", Foreground = MutedBrush });
         }
     }
 
@@ -166,8 +412,6 @@ public partial class MainWindow : Window
             : value.ToString("0.###", CultureInfo.InvariantCulture) + unit;
     }
 
-    // Apply the current patch selection to WoW.exe shortly after a change (debounced so a slider
-    // drag coalesces into a single rebuild). Never applies during initial UI load.
     private void SchedulePatchApply()
     {
         if (_loading)
@@ -229,7 +473,6 @@ public partial class MainWindow : Window
         }
 
         string chosen = dialog.FileName;
-        // Store just the file name when it lives in the game folder; otherwise the full path.
         string parent = Path.GetDirectoryName(chosen) ?? string.Empty;
         string entry = string.Equals(parent.TrimEnd(Path.DirectorySeparatorChar),
             wowDir.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)
@@ -240,6 +483,7 @@ public partial class MainWindow : Window
         {
             _dllItems.Add(entry);
             SaveDllList();
+            RefreshDetectedDlls();
         }
     }
 
@@ -249,6 +493,7 @@ public partial class MainWindow : Window
         {
             _dllItems.Remove(item);
             SaveDllList();
+            RefreshDetectedDlls();
         }
     }
 
@@ -268,6 +513,88 @@ public partial class MainWindow : Window
         _dllItems.Move(i, j);
         DllList.SelectedIndex = j;
         SaveDllList();
+    }
+
+    private void RefreshDetectedDlls()
+    {
+        _detectedDllItems.Clear();
+        foreach (string name in _dlls.ScanForUntrackedDlls(CurrentWowDir(), _settings.Current.IgnoredDetectedDlls))
+        {
+            _detectedDllItems.Add(name);
+        }
+    }
+
+    private void OnRefreshDetectedDlls(object sender, RoutedEventArgs e) => RefreshDetectedDlls();
+
+    private void OnAddDetectedDlls(object sender, RoutedEventArgs e)
+    {
+        List<string> selected = DetectedDllList.SelectedItems.Cast<string>().ToList();
+        if (selected.Count == 0)
+        {
+            return;
+        }
+
+        foreach (string name in selected)
+        {
+            if (!_dllItems.Contains(name))
+            {
+                _dllItems.Add(name);
+            }
+        }
+
+        SaveDllList();
+        RefreshDetectedDlls();
+    }
+
+    private void OnIgnoreDetectedDlls(object sender, RoutedEventArgs e)
+    {
+        List<string> selected = DetectedDllList.SelectedItems.Cast<string>().ToList();
+        if (selected.Count == 0)
+        {
+            return;
+        }
+
+        List<string> ignored = _settings.Current.IgnoredDetectedDlls;
+        foreach (string name in selected)
+        {
+            if (!ignored.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                ignored.Add(name);
+            }
+        }
+
+        _settings.Save();
+        RefreshDetectedDlls();
+        RefreshIgnoredDllList();
+    }
+
+    // ---------------- Ignored DLLs (Settings tab) ----------------
+
+    private void RefreshIgnoredDllList()
+    {
+        _ignoredDllItems.Clear();
+        foreach (string name in _settings.Current.IgnoredDetectedDlls.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+        {
+            _ignoredDllItems.Add(name);
+        }
+    }
+
+    private void OnUnignoreDlls(object sender, RoutedEventArgs e)
+    {
+        List<string> selected = IgnoredDllList.SelectedItems.Cast<string>().ToList();
+        if (selected.Count == 0)
+        {
+            return;
+        }
+
+        foreach (string name in selected)
+        {
+            _settings.Current.IgnoredDetectedDlls.RemoveAll(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase));
+        }
+
+        _settings.Save();
+        RefreshIgnoredDllList();
+        RefreshDetectedDlls();
     }
 
     // ---------------- MPQ tab ----------------
@@ -293,7 +620,14 @@ public partial class MainWindow : Window
         {
             var row = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
 
-            var remove = new Button { Content = "Remove", Padding = new Thickness(8, 3, 8, 3) };
+            var remove = new Button
+            {
+                Style = (Style)FindResource("IconButtonStyle"),
+                Content = "", // Segoe Fluent Icons: Delete
+                Width = 28,
+                Height = 28,
+                ToolTip = "Remove this patch",
+            };
             remove.Click += (_, _) =>
             {
                 _mpq.Remove(wowDir, patch);
@@ -338,6 +672,21 @@ public partial class MainWindow : Window
 
     private void OnRefreshMpq(object sender, RoutedEventArgs e) => RefreshMpqList();
 
+    private void OnSelectAllMpq(object sender, RoutedEventArgs e) => SetAllMpqEnabled(true);
+
+    private void OnDeselectAllMpq(object sender, RoutedEventArgs e) => SetAllMpqEnabled(false);
+
+    private void SetAllMpqEnabled(bool enabled)
+    {
+        string wowDir = CurrentWowDir();
+        foreach (MpqPatch patch in _mpq.Scan(wowDir))
+        {
+            _mpq.SetEnabled(wowDir, patch, enabled);
+        }
+
+        RefreshMpqList();
+    }
+
     // ---------------- Addons tab ----------------
 
     private void InitAddonsTab()
@@ -356,28 +705,12 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void OnAddAddonFromUrl(object sender, RoutedEventArgs e)
+    private async void OnOpenAddAddonDialog(object sender, RoutedEventArgs e)
     {
-        string input = AddonUrlBox.Text?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(input))
+        var dialog = new AddAddonDialog { Owner = this };
+        if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.Input))
         {
-            AddonStatusText.Text = "Enter a GitHub repo or .zip URL.";
-            return;
-        }
-
-        await AddAddonAsync(input);
-    }
-
-    private async void OnAddAddonFromFile(object sender, RoutedEventArgs e)
-    {
-        var dialog = new OpenFileDialog
-        {
-            Title = "Select an addon archive",
-            Filter = "Addon archives (*.zip;*.rar;*.7z)|*.zip;*.rar;*.7z|All files (*.*)|*.*",
-        };
-        if (dialog.ShowDialog() == true)
-        {
-            await AddAddonAsync(dialog.FileName);
+            await AddAddonAsync(dialog.Input);
         }
     }
 
@@ -393,9 +726,8 @@ public partial class MainWindow : Window
         try
         {
             InstalledAddon addon = await _addons.AddAsync(input, CurrentWowDir());
-            AddonUrlBox.Text = string.Empty;
             RefreshAddonList();
-            AddonStatusText.Text = $"Installed {addon.Name}.";
+            AddonStatusText.Text = $"Installed {WowColorTextParser.StripCodes(addon.Name)}.";
         }
         catch (Exception ex)
         {
@@ -408,32 +740,60 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnRemoveAddon(object sender, RoutedEventArgs e)
+    private void OnRemoveAddonClick(object sender, RoutedEventArgs e)
     {
-        if (AddonList.SelectedItem is InstalledAddon addon)
+        if (sender is Button { Tag: InstalledAddon addon })
         {
             _addons.Remove(addon, CurrentWowDir());
             RefreshAddonList();
-            AddonStatusText.Text = $"Removed {addon.Name}.";
+            AddonStatusText.Text = $"Removed {WowColorTextParser.StripCodes(addon.Name)}.";
         }
     }
 
-    private async void OnUpdateAddon(object sender, RoutedEventArgs e)
+    private async void OnUpdateAddonClick(object sender, RoutedEventArgs e)
     {
-        // Re-fetching from the same source reinstalls the latest and updates the tracked entry in place.
-        if (AddonList.SelectedItem is InstalledAddon addon && !string.IsNullOrWhiteSpace(addon.SourceRef))
+        if (sender is Button { Tag: InstalledAddon addon } && !string.IsNullOrWhiteSpace(addon.SourceRef))
         {
             await AddAddonAsync(addon.SourceRef);
         }
     }
 
-    private void OnRefreshAddons(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Refresh now does everything at once: reload from disk, re-read each tracked addon's own .toc
+    /// (in case it changed on disk), auto-adopt any untracked local folder that doesn't collide with an
+    /// existing addon's name, and check every remote-tracked addon for an update. A conflict dialog only
+    /// appears when a local folder's name actually collides with something already tracked.
+    /// </summary>
+    private async void OnRefreshAddons(object sender, RoutedEventArgs e)
     {
+        string wowDir = CurrentWowDir();
+
         _addons.Load();
+        _addons.RefreshMetadataFromDisk(wowDir);
+
+        AddonLibrary.LocalAddonSyncResult sync = _addons.SyncLocalAddons(wowDir);
+        if (sync.Conflicts.Count > 0)
+        {
+            var dialog = new LocalAddonsDialog(sync.Conflicts) { Owner = this };
+            if (dialog.ShowDialog() == true)
+            {
+                foreach (LocalAddonCandidate candidate in dialog.Selected)
+                {
+                    _addons.Adopt(candidate);
+                }
+            }
+        }
+
+        AddonStatusText.Text = "Checking for addon updates…";
+        await _addons.CheckForUpdatesAsync();
+
         RefreshAddonList();
+        AddonStatusText.Text = sync.AutoAdopted > 0
+            ? $"Refreshed. {sync.AutoAdopted} local addon(s) added automatically."
+            : "Refreshed.";
     }
 
-    // ---------------- Login & Game tab ----------------
+    // ---------------- Home tab (Login & Game) ----------------
 
     private void LoadSettingsIntoUi()
     {
@@ -445,7 +805,12 @@ public partial class MainWindow : Window
         PasswordBoxInput.Password = s.SavePassword ? _settings.GetPassword() : string.Empty;
         DelayBox.Text = s.LoginDelayMs.ToString(CultureInfo.InvariantCulture);
         RealmlistBox.Text = s.Realmlist;
+        ClientUrlBox.Text = string.IsNullOrWhiteSpace(s.ClientDownloadUrl)
+            ? GameInstallService.DefaultClientUrl
+            : s.ClientDownloadUrl;
+
         UpdateGameFolderHint();
+        UpdateRealmlistLabel();
     }
 
     private void CollectSettingsFromUi()
@@ -459,6 +824,19 @@ public partial class MainWindow : Window
             ? Math.Max(0, d)
             : s.LoginDelayMs;
         s.Realmlist = RealmlistBox.Text.Trim();
+
+        // Only accept a well-formed absolute http(s) URL; otherwise keep whatever was last valid
+        // (a URL drives an actual HTTP request, so a malformed one must never silently take effect).
+        string url = ClientUrlBox.Text?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(url) || url == GameInstallService.DefaultClientUrl)
+        {
+            s.ClientDownloadUrl = null;
+        }
+        else if (Uri.TryCreate(url, UriKind.Absolute, out Uri? parsedUrl) &&
+                 (parsedUrl.Scheme == Uri.UriSchemeHttp || parsedUrl.Scheme == Uri.UriSchemeHttps))
+        {
+            s.ClientDownloadUrl = url;
+        }
 
         _settings.SetPassword(PasswordBoxInput.Password);
 
@@ -477,18 +855,60 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnSaveSettings(object sender, RoutedEventArgs e)
+    /// <summary>Debounced so a burst of keystrokes settles into one save, not one per character.</summary>
+    private void ScheduleSettingsSave()
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        _settingsSaveTimer.Stop();
+        _settingsSaveTimer.Start();
+    }
+
+    private async void OnSettingsSaveTick(object? sender, EventArgs e)
+    {
+        _settingsSaveTimer.Stop();
+        if (_savingSettings)
+        {
+            _settingsSaveTimer.Start();
+            return;
+        }
+
+        _savingSettings = true;
+        try
+        {
+            await PersistSettingsFromUiAsync();
+        }
+        finally
+        {
+            _savingSettings = false;
+        }
+    }
+
+    /// <summary>
+    /// Saves every field, then only runs the heavier side effects (realmlist.wtf, folder rescans, a
+    /// network update check) for whichever of WoW directory / realmlist / client URL actually changed.
+    /// </summary>
+    private async Task PersistSettingsFromUiAsync()
     {
         CollectSettingsFromUi();
         _settings.Save();
 
-        // Write realmlist.wtf immediately on save (not on every launch).
         string wowDir = CurrentWowDir();
-        if (!string.IsNullOrWhiteSpace(_settings.Current.Realmlist) && Directory.Exists(wowDir))
+        string realmlist = _settings.Current.Realmlist;
+        string clientUrl = CurrentClientUrl();
+
+        bool wowDirChanged = !string.Equals(wowDir, _lastAppliedWowDir, StringComparison.OrdinalIgnoreCase);
+        bool realmlistChanged = !string.Equals(realmlist, _lastAppliedRealmlist, StringComparison.Ordinal);
+        bool clientUrlChanged = !string.Equals(clientUrl, _lastAppliedClientUrl, StringComparison.OrdinalIgnoreCase);
+
+        if (realmlistChanged && !string.IsNullOrWhiteSpace(realmlist) && Directory.Exists(wowDir))
         {
             try
             {
-                _realmlist.Write(wowDir, _settings.Current.Realmlist);
+                _realmlist.Write(wowDir, realmlist);
             }
             catch (Exception ex)
             {
@@ -497,10 +917,46 @@ public partial class MainWindow : Window
         }
 
         UpdateGameFolderHint();
-        RefreshDllList();
-        RefreshMpqList();
+        UpdateRealmlistLabel();
+
+        if (wowDirChanged)
+        {
+            RefreshDllList();
+            RefreshDetectedDlls();
+            RefreshMpqList();
+            RefreshAddonList();
+        }
+
+        if (wowDirChanged || clientUrlChanged)
+        {
+            await RefreshPlayButtonStateAsync();
+        }
+
+        _lastAppliedWowDir = wowDir;
+        _lastAppliedRealmlist = realmlist;
+        _lastAppliedClientUrl = clientUrl;
+
         UpdateStatus("Settings saved.");
     }
+
+    private string CurrentWowDir()
+        => !string.IsNullOrWhiteSpace(GameFolderBox.Text) && Directory.Exists(GameFolderBox.Text)
+            ? GameFolderBox.Text.Trim()
+            : _settings.ResolveWowDirectory();
+
+    private string CurrentClientUrl()
+    {
+        string url = ClientUrlBox.Text?.Trim() ?? string.Empty;
+        return string.IsNullOrWhiteSpace(url) ? GameInstallService.DefaultClientUrl : url;
+    }
+
+    private void UpdateRealmlistLabel()
+    {
+        string realm = RealmlistBox.Text?.Trim() ?? string.Empty;
+        RealmlistLabel.Text = $"Realmlist: {(string.IsNullOrEmpty(realm) ? "(not set)" : realm)}";
+    }
+
+    // ---------------- Settings tab ----------------
 
     private void OnBrowseGameFolder(object sender, RoutedEventArgs e)
     {
@@ -512,10 +968,8 @@ public partial class MainWindow : Window
 
         if (dialog.ShowDialog() == true)
         {
+            // Setting .Text fires TextChanged, which schedules the same auto-save/refresh pipeline.
             GameFolderBox.Text = dialog.FolderName;
-            UpdateGameFolderHint();
-            RefreshDllList();
-            RefreshMpqList();
         }
     }
 
@@ -526,126 +980,165 @@ public partial class MainWindow : Window
         GameFolderHint.Text = File.Exists(exe) ? $"✓ WoW.exe found in {dir}" : $"⚠ WoW.exe not found in {dir}";
     }
 
-    private string CurrentWowDir()
-        => !string.IsNullOrWhiteSpace(GameFolderBox.Text) && Directory.Exists(GameFolderBox.Text)
-            ? GameFolderBox.Text.Trim()
-            : _settings.ResolveWowDirectory();
-
-    // ---------------- Install / Update tab ----------------
-
-    private void InitInstallTab()
+    private async void OnRepairGameFiles(object sender, RoutedEventArgs e)
     {
-        InstallFolderBox.Text = CurrentWowDir();
-        ClientUrlBox.Text = string.IsNullOrWhiteSpace(_settings.Current.ClientDownloadUrl)
-            ? GameInstallService.DefaultClientUrl
-            : _settings.Current.ClientDownloadUrl;
-        UpdateInstallStatus();
-    }
-
-    private void UpdateInstallStatus()
-    {
-        string dir = InstallFolderBox.Text?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(dir))
+        string wowDir = CurrentWowDir();
+        if (!_install.IsInstalled(wowDir))
         {
-            InstallStatusText.Text = "Choose an install folder.";
+            UpdateStatus("Nothing installed to repair yet.");
             return;
         }
 
-        string? version = _install.GetClientVersion(dir);
-        InstallStatusText.Text = version is null
-            ? "No client installed here yet."
-            : version == GameInstallService.ExpectedVersion
-                ? $"✓ Client installed: {version} (up to date)."
-                : $"⚠ Client version {version} found (expected {GameInstallService.ExpectedVersion}).";
-    }
+        MessageBoxResult confirm = MessageBox.Show(
+            this,
+            "This will re-download and reinstall all game files from the source URL, overwriting anything " +
+            "that differs locally. There is no per-file update list for this client, so the whole archive " +
+            "is refreshed. Continue?",
+            "Repair Game Files",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
 
-    private void OnBrowseInstallFolder(object sender, RoutedEventArgs e)
-    {
-        var dialog = new OpenFolderDialog { Title = "Select where to install the client" };
-        if (!string.IsNullOrWhiteSpace(InstallFolderBox.Text) && Directory.Exists(InstallFolderBox.Text))
+        if (confirm != MessageBoxResult.Yes)
         {
-            dialog.InitialDirectory = InstallFolderBox.Text;
-        }
-
-        if (dialog.ShowDialog() == true)
-        {
-            InstallFolderBox.Text = dialog.FolderName;
-            UpdateInstallStatus();
-        }
-    }
-
-    private async void OnInstallClicked(object sender, RoutedEventArgs e)
-    {
-        string dir = InstallFolderBox.Text?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(dir))
-        {
-            UpdateStatus("Choose an install folder first.");
             return;
         }
 
-        string url = string.IsNullOrWhiteSpace(ClientUrlBox.Text)
-            ? GameInstallService.DefaultClientUrl
-            : ClientUrlBox.Text.Trim();
+        await RunClientDownloadAsync(wowDir, "Game files repaired.", "Repair failed");
+    }
 
-        // Persist a non-default URL so it survives restarts.
-        _settings.Current.ClientDownloadUrl = url == GameInstallService.DefaultClientUrl ? null : url;
-        _settings.Save();
+    // ---------------- Play / Install / Update ----------------
 
-        InstallButton.IsEnabled = false;
-        CancelInstallButton.IsEnabled = true;
-        _installCts = new CancellationTokenSource();
-        var progress = new Progress<InstallProgress>(OnInstallProgress);
+    private void SetPlayState(PlayButtonState state)
+    {
+        _playState = state;
+        (PlayButton.Content, PlayButton.Background) = state switch
+        {
+            PlayButtonState.Install => ("INSTALL", InstallColor),
+            PlayButtonState.Update => ("UPDATE", UpdateColor),
+            _ => ("PLAY", PlayColor),
+        };
+    }
+
+    private async Task RefreshPlayButtonStateAsync()
+    {
+        string wowDir = CurrentWowDir();
+        if (!_install.IsInstalled(wowDir))
+        {
+            SetPlayState(PlayButtonState.Install);
+            return;
+        }
+
+        UpdateCheckResult check = await _install.CheckForUpdateAsync(
+            CurrentClientUrl(), _settings.Current.InstalledClientSignature, CancellationToken.None);
+        _pendingUpdateCheck = check;
+        SetPlayState(check.UpdateAvailable ? PlayButtonState.Update : PlayButtonState.Play);
+    }
+
+    private async void OnPlayClicked(object sender, RoutedEventArgs e)
+    {
+        switch (_playState)
+        {
+            case PlayButtonState.Install:
+                await RunInstallFlowAsync();
+                break;
+            case PlayButtonState.Update:
+                await RunUpdateFlowAsync();
+                break;
+            default:
+                await RunPlayFlowAsync();
+                break;
+        }
+    }
+
+    private async Task RunInstallFlowAsync()
+    {
+        string defaultDir = !string.IsNullOrWhiteSpace(GameFolderBox.Text) ? GameFolderBox.Text.Trim() : AppContext.BaseDirectory;
+        var dialog = new InstallDialog(defaultDir) { Owner = this };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        string targetDir = dialog.SelectedFolder;
+        bool ok = await RunClientDownloadAsync(targetDir, "Client installed.", "Install failed");
+        if (ok)
+        {
+            _settings.Current.WowDirectory = targetDir;
+            _settings.Save();
+
+            // Stop any pending debounce first: setting .Text below fires TextChanged, and without
+            // this it would schedule a redundant duplicate of the refresh/recheck we do right here.
+            _settingsSaveTimer.Stop();
+            GameFolderBox.Text = targetDir;
+            _lastAppliedWowDir = targetDir;
+
+            UpdateGameFolderHint();
+            RefreshDllList();
+            RefreshDetectedDlls();
+            RefreshMpqList();
+            RefreshAddonList();
+        }
+    }
+
+    private async Task RunUpdateFlowAsync()
+    {
+        if (_pendingUpdateCheck is not { UpdateAvailable: true })
+        {
+            await RefreshPlayButtonStateAsync();
+            return;
+        }
+
+        var dialog = new UpdateConfirmDialog(_pendingUpdateCheck.Detail) { Owner = this };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        await RunClientDownloadAsync(CurrentWowDir(), "Client updated.", "Update failed");
+    }
+
+    private async Task<bool> RunClientDownloadAsync(string targetDir, string successMessage, string failureMessage)
+    {
+        PlayButton.IsEnabled = false;
+        MainProgressBar.Visibility = Visibility.Visible;
+        MainProgressBar.IsIndeterminate = false;
+        MainProgressBar.Value = 0;
 
         try
         {
-            _log.Info($"Installing client from {url} to {dir}");
-            await _install.DownloadAndInstallAsync(url, dir, progress, _installCts.Token);
-
-            // The install folder is now the game home.
-            GameFolderBox.Text = dir;
-            _settings.Current.WowDirectory = dir;
+            var progress = new Progress<InstallProgress>(OnInstallProgress);
+            string? signature = await _install.DownloadAndInstallAsync(CurrentClientUrl(), targetDir, progress, CancellationToken.None);
+            _settings.Current.InstalledClientSignature = signature;
             _settings.Save();
-            UpdateGameFolderHint();
-            RefreshDllList();
-            RefreshMpqList();
-            UpdateInstallStatus();
-            InstallProgressBar.IsIndeterminate = false;
-            InstallProgressBar.Value = 100;
-            UpdateStatus("Client installed.");
-        }
-        catch (OperationCanceledException)
-        {
-            UpdateStatus("Download cancelled.");
+            UpdateStatus(successMessage);
+            await RefreshPlayButtonStateAsync();
+            return true;
         }
         catch (Exception ex)
         {
-            _log.Error("Client install failed.", ex);
-            UpdateStatus("Install failed — see the Log tab.");
+            _log.Error($"{failureMessage}.", ex);
+            UpdateStatus($"{failureMessage} — see the Log tab.");
+            return false;
         }
         finally
         {
-            InstallProgressBar.IsIndeterminate = false;
-            InstallButton.IsEnabled = true;
-            CancelInstallButton.IsEnabled = false;
-            _installCts?.Dispose();
-            _installCts = null;
+            MainProgressBar.Visibility = Visibility.Collapsed;
+            PlayButton.IsEnabled = true;
         }
     }
-
-    private void OnCancelInstall(object sender, RoutedEventArgs e) => _installCts?.Cancel();
 
     private void OnInstallProgress(InstallProgress p)
     {
         if (p.Extracting)
         {
-            InstallProgressBar.IsIndeterminate = true;
+            MainProgressBar.IsIndeterminate = true;
             UpdateStatus("Extracting client...");
             return;
         }
 
-        InstallProgressBar.IsIndeterminate = false;
+        MainProgressBar.IsIndeterminate = false;
         double pct = p.Total > 0 ? (double)p.Downloaded / p.Total * 100 : 0;
-        InstallProgressBar.Value = pct;
+        MainProgressBar.Value = pct;
         string speed = p.BytesPerSecond > 0 ? $" — {FormatBytes((long)p.BytesPerSecond)}/s" : string.Empty;
         UpdateStatus($"Downloading {pct:0}%  ({FormatBytes(p.Downloaded)} / {FormatBytes(p.Total)}){speed}");
     }
@@ -664,9 +1157,7 @@ public partial class MainWindow : Window
         return $"{value:0.#} {units[i]}";
     }
 
-    // ---------------- Play ----------------
-
-    private async void OnPlayClicked(object sender, RoutedEventArgs e)
+    private async Task RunPlayFlowAsync()
     {
         CollectSettingsFromUi();
         _settings.Save();
@@ -688,6 +1179,8 @@ public partial class MainWindow : Window
             PlayButton.IsEnabled = true;
         }
     }
+
+    // ---------------- Shared ----------------
 
     private void UpdateStatus(string message) => StatusText.Text = message;
 

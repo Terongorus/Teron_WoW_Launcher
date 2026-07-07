@@ -22,8 +22,8 @@
     <Product>Teron WoW Launcher (TWL)</Product>
     <Company>Teronverse</Company>
     <Authors>Kaloyan Kolev</Authors>
-    <Version>0.1.0</Version>
-    <!-- Keep AssemblyInformationalVersion clean ("0.1.0", not "0.1.0+<gitsha>"). -->
+    <Version>1.0.0</Version>
+    <!-- Keep AssemblyInformationalVersion clean ("1.0.0", not "1.0.0+<gitsha>"). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
@@ -43,6 +43,33 @@
   <ItemGroup>
     <!-- Extracts .rar/.7z addon archives (the BCL only handles .zip). Pure-managed, MIT. -->
     <PackageReference Include="SharpCompress" Version="0.49.1" />
+    <!-- Renders README.md/CHANGELOG.md as a WPF FlowDocument on the Home tab. MIT. -->
+    <PackageReference Include="Markdig.Wpf" Version="0.5.0.1" />
   </ItemGroup>
+
+  <!--
+    Builds the Inno Setup installer right after `dotnet publish`/VS Publish finishes writing the
+    self-contained output, so publishing the win-x86 profile (the only one - this app is x86-only)
+    produces a ready-to-distribute "TeronWoWLauncherSetup-x86.exe" in bin\InstallerPackage with no
+    extra steps. No-ops (with a warning) if Inno Setup isn't installed, so it never breaks a plain
+    build/publish.
+
+    Everything here is computed inside the target body, evaluated when the target actually runs,
+    rather than in a top-level PropertyGroup: publish-profile properties like RuntimeIdentifier and
+    SelfContained aren't populated yet during the project's normal (early) static evaluation of
+    top-level PropertyGroups - only once the publish pipeline itself is running.
+  -->
+  <Target Name="BuildInnoSetupInstaller" AfterTargets="Publish">
+    <PropertyGroup>
+      <InnoSetupCompiler Condition="'$(InnoSetupCompiler)' == '' AND Exists('$(LocalAppData)\Programs\Inno Setup 6\ISCC.exe')">$(LocalAppData)\Programs\Inno Setup 6\ISCC.exe</InnoSetupCompiler>
+      <InnoSetupCompiler Condition="'$(InnoSetupCompiler)' == '' AND Exists('$(MSBuildProgramFiles32)\Inno Setup 6\ISCC.exe')">$(MSBuildProgramFiles32)\Inno Setup 6\ISCC.exe</InnoSetupCompiler>
+      <InnoSetupCompiler Condition="'$(InnoSetupCompiler)' == '' AND Exists('$(ProgramFiles)\Inno Setup 6\ISCC.exe')">$(ProgramFiles)\Inno Setup 6\ISCC.exe</InnoSetupCompiler>
+    </PropertyGroup>
+
+    <Exec Command="&quot;$(InnoSetupCompiler)&quot; /DMyAppVersion=$(FileVersion) &quot;$(MSBuildProjectDirectory)\Installer\TeronWoWLauncher.iss&quot;"
+          Condition="'$(RuntimeIdentifier)' == 'win-x86' AND '$(SelfContained)' == 'true' AND '$(InnoSetupCompiler)' != ''" />
+    <Warning Text="Inno Setup (ISCC.exe) was not found in the usual install locations; skipping installer build. Install it with 'winget install JRSoftware.InnoSetup' to enable this step."
+              Condition="'$(RuntimeIdentifier)' == 'win-x86' AND '$(SelfContained)' == 'true' AND '$(InnoSetupCompiler)' == ''" />
+  </Target>
 
 </Project>

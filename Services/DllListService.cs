@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace TeronWoWLauncher.Services;
 
@@ -20,6 +21,19 @@ public sealed class DllListService
 {
     public const string DllsFileName = "dlls.txt";
     public const string CacheFileName = "dlls.txt.cache";
+
+    // Blizzard's own runtime DLLs that ship with the base 1.12.1 client — never offered as
+    // trackable mods, since tracking/injecting them would be meaningless or harmful.
+    private static readonly HashSet<string> BaseGameDlls = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "dbghelp.dll", "DivxDecoder.dll", "fmod.dll", "ijl15.dll", "unicows.dll", "Scan.dll",
+    };
+
+    // The launcher's own binaries, in case it lives in the game folder alongside WoW.exe.
+    private static readonly HashSet<string> LauncherOwnDlls = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "TeronWoWLauncher.dll", "SharpCompress.dll",
+    };
 
     private readonly Logger _log = Logger.Instance;
 
@@ -80,6 +94,39 @@ public sealed class DllListService
     /// <summary>The resolved, existence-checked injection list read straight from disk.</summary>
     public List<string> GetInjectionList(string wowDir)
         => ResolveForInjection(wowDir, ReadActiveNames(wowDir));
+
+    /// <summary>
+    /// DLLs sitting directly in the game folder that aren't already tracked in dlls.txt, excluding
+    /// Blizzard's own base-game runtime DLLs, the launcher's own binaries, and anything the user has
+    /// explicitly ignored (e.g. files that aren't actually meant for injection). Lets the UI offer a
+    /// "Refresh" scan instead of requiring every DLL to be added manually via file picker.
+    /// </summary>
+    public List<string> ScanForUntrackedDlls(string wowDir, IEnumerable<string>? ignored = null)
+    {
+        var result = new List<string>();
+        if (!Directory.Exists(wowDir))
+        {
+            return result;
+        }
+
+        var tracked = new HashSet<string>(ReadActiveNames(wowDir), StringComparer.OrdinalIgnoreCase);
+        var ignoredSet = new HashSet<string>(ignored ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (string path in Directory.EnumerateFiles(wowDir, "*.dll", SearchOption.TopDirectoryOnly))
+        {
+            string name = Path.GetFileName(path);
+            if (BaseGameDlls.Contains(name) || LauncherOwnDlls.Contains(name) ||
+                tracked.Contains(name) || ignoredSet.Contains(name))
+            {
+                continue;
+            }
+
+            result.Add(name);
+        }
+
+        result.Sort(StringComparer.OrdinalIgnoreCase);
+        return result;
+    }
 
     /// <summary>
     /// Persist the active DLL names to dlls.txt. Any leading comment block is preserved so the

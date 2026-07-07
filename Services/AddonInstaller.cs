@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using SharpCompress.Archives;
 using SharpCompress.Common;
+using TeronWoWLauncher.Models;
 
 namespace TeronWoWLauncher.Services;
 
@@ -19,8 +20,8 @@ public sealed class AddonInstaller
 {
     private readonly Logger _log = Logger.Instance;
 
-    /// <summary>Install every addon in the archive; returns the AddOns subfolder names created.</summary>
-    public List<string> InstallFromArchive(string archivePath, string wowDir)
+    /// <summary>Install every addon in the archive; returns each installed folder with its .toc metadata.</summary>
+    public List<InstalledFolderInfo> InstallFromArchive(string archivePath, string wowDir)
     {
         string temp = Path.Combine(Path.GetTempPath(), $"teronwow_extract_{Guid.NewGuid():N}");
         Directory.CreateDirectory(temp);
@@ -36,7 +37,7 @@ public sealed class AddonInstaller
             }
 
             string addonsDir = AddonPaths.EnsureAddOnsDir(wowDir);
-            var installed = new List<string>();
+            var installed = new List<InstalledFolderInfo>();
             foreach ((string dir, string name) in addons)
             {
                 string dest = Path.Combine(addonsDir, name);
@@ -46,7 +47,8 @@ public sealed class AddonInstaller
                 }
 
                 CopyDirectory(dir, dest);
-                installed.Add(name);
+                (string? title, string? version) = TocMetadataReader.Read(dest);
+                installed.Add(new InstalledFolderInfo(name, title, version));
                 _log.Info($"Installed addon: {name}");
             }
 
