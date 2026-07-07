@@ -91,16 +91,17 @@ public static class PatchCatalog
 
         // --- Adjustable tweaks ---
 
-        list.Add(FloatTweak("fov", "Widescreen FoV", "Field of view in radians (game default 1.5708).",
-            0x4089B4, new byte[] { 0xDB, 0x0F, 0xC9, 0x3F }, min: 1.40, max: 2.20, def: 1.925, unit: "rad"));
+        list.Add(FloatTweak("fov", "Widescreen FoV", "Field of view (game default 90°).",
+            0x4089B4, new byte[] { 0xDB, 0x0F, 0xC9, 0x3F }, min: 80, max: 126, def: 110, unit: "deg",
+            convertToRaw: degrees => degrees * Math.PI / 180.0));
 
         list.Add(FloatTweak("farclip", "Render distance (farclip)",
             "Maximum terrain render distance (game default 777).",
-            0x40FED8, new byte[] { 0x00, 0x40, 0x42, 0x44 }, min: 777, max: 10000, def: 10000));
+            0x40FED8, new byte[] { 0x00, 0x40, 0x42, 0x44 }, min: 777, max: 10000, def: 10000, unit: "yds"));
 
         list.Add(FloatTweak("frilldistance", "Grass render distance",
             "Grass/detail-doodad render distance (game default 70).",
-            0x467958, new byte[] { 0x00, 0x00, 0x8C, 0x42 }, min: 0, max: 500, def: 300));
+            0x467958, new byte[] { 0x00, 0x00, 0x8C, 0x42 }, min: 0, max: 500, def: 300, unit: "yds"));
 
         list.Add(FloatTweak("nameplate", "Nameplate distance",
             "Distance at which nameplates are visible (game default 20; client hard cap ~41 yds).",
@@ -109,7 +110,7 @@ public static class PatchCatalog
         list.Add(FloatTweak("max-camera-distance", "Max camera distance limit",
             "Raises the CameraDistanceMax ceiling (game default 50). After enabling, set it in-game " +
             "with /console CameraDistanceMax.",
-            0x4089A4, new byte[] { 0x00, 0x00, 0x48, 0x42 }, min: 15, max: 125, def: 100, defaultEnabled: false));
+            0x4089A4, new byte[] { 0x00, 0x00, 0x48, 0x42 }, min: 15, max: 125, def: 100, unit: "yds", defaultEnabled: false));
 
         // Sound channels: ASCII digits (null-padded to 4 bytes) over "12\0\0" @0x435D38.
         list.Add(new PatchDefinition
@@ -119,7 +120,7 @@ public static class PatchCatalog
             Description = "Default software sound channel count (game default 12; values above 64 may crash).",
             Category = PatchCategory.VanillaTweak,
             DefaultEnabled = true,
-            Parameter = new PatchParameter { Label = "Sound channels", Min = 1, Max = 999, Default = 64, IsInteger = true },
+            Parameter = new PatchParameter { Min = 1, Max = 999, Default = 64, IsInteger = true },
             BuildSteps = v =>
             {
                 int channels = Math.Clamp((int)Math.Round(v ?? 64), 1, 999);
@@ -147,9 +148,17 @@ public static class PatchCatalog
             BuildSteps = _ => steps,
         };
 
+    /// <summary>
+    /// A patch controlled by a single numeric UI value. That value is shown/edited as a whole
+    /// number by default; when the client's own byte layout expects something else (e.g. FoV in
+    /// radians while the UI shows degrees), <paramref name="convertToRaw"/> converts the UI value
+    /// to the client's raw unit right before it's written — the UI/settings value itself always
+    /// stays in the human-facing unit.
+    /// </summary>
     private static PatchDefinition FloatTweak(
         string id, string name, string description, long offset, byte[] acceptBefore,
-        double min, double max, double def, string? unit = null, bool defaultEnabled = true)
+        double min, double max, double def, string? unit = null, bool defaultEnabled = true,
+        bool isInteger = true, Func<double, double>? convertToRaw = null)
         => new()
         {
             Id = id,
@@ -157,15 +166,20 @@ public static class PatchCatalog
             Description = description,
             Category = PatchCategory.VanillaTweak,
             DefaultEnabled = defaultEnabled,
-            Parameter = new PatchParameter { Label = name, Min = min, Max = max, Default = def, Unit = unit },
-            BuildSteps = v => new List<PatchStep>
+            Parameter = new PatchParameter { Min = min, Max = max, Default = def, Unit = unit, IsInteger = isInteger },
+            BuildSteps = v =>
             {
-                new()
+                double uiValue = v ?? def;
+                double raw = convertToRaw is null ? uiValue : convertToRaw(uiValue);
+                return new List<PatchStep>
                 {
-                    Offset = offset,
-                    Write = BitConverter.GetBytes((float)(v ?? def)),
-                    AcceptBefore = new[] { acceptBefore },
-                },
+                    new()
+                    {
+                        Offset = offset,
+                        Write = BitConverter.GetBytes((float)raw),
+                        AcceptBefore = new[] { acceptBefore },
+                    },
+                };
             },
         };
 

@@ -11,29 +11,77 @@ Point it at your WoW folder (or let it install the client for you), hit **Play**
 the executable, injects your DLLs, launches the game, and logs you in — in that order, every
 time, automatically skipping anything that hasn't changed since last time.
 
-## What you can do with it
+## Getting started
 
-- **One button that adapts to what you need.** The main button reads **Install** when there's no
-  client yet, **Update** when a newer client archive is available, or **Play** once everything's
-  ready — no separate install wizard to find first.
-- **Tweak the client without touching a hex editor.** Toggle Large Address Aware, widescreen FoV,
-  render distance, grass distance, nameplate range, sound channels, sound-while-alt-tabbed,
-  auto-loot, and a camera-glitch fix — most with a slider for the exact value you want. Every
-  change applies immediately; nothing waits for a "Save" button.
-- **Load whatever DLLs you use.** Add them from a picker or from a "detected in your game folder"
-  list, reorder load order, and hide DLLs you don't want suggested again.
-- **Manage custom MPQ patches** (`patch-A.mpq` … `patch-Z.mpq`) with simple enable/disable
-  checkboxes, Select All / Deselect All, and no risk of touching Blizzard's own base-game
-  archives.
-- **Add addons the way that's actually convenient**: paste a GitHub repo link, a direct archive
-  URL, or point at a `.zip`/`.rar`/`.7z` you already downloaded. Addon names show their real
-  in-game colors, versions come straight from each addon's own `.toc`, and one Refresh both
-  checks for updates and picks up anything you installed by hand.
-- **Log in automatically**, with your password encrypted on your own PC (Windows DPAPI) — never
-  stored in plain text.
-- **Connect to any private server**, not a fixed list — set your realmlist once from Settings.
-- **See what changed, without digging through folders.** A live log tab, and a Home tab that
-  shows this project's own README and changelog right inside the app.
+1. Place the launcher in (or point it at, from the **Settings** tab) your World of Warcraft
+   folder — the one with `WoW.exe` in it.
+2. On the **Home** tab, set your realmlist (top-right link, or via Settings), and optionally your
+   account and password if you want to log in automatically.
+3. Hit the big button in the bottom-right corner. If there's no client yet, it reads **Install** —
+   pick a destination folder and the launcher downloads and sets everything up for you. Once a
+   client's in place, the same button reads **Play**; if a newer client archive shows up later,
+   it reads **Update** instead. Whichever it says, that's the one thing you need to click.
+
+That's the whole day-to-day workflow. Everything below is what each tab does, for when you want
+to go further than the defaults.
+
+## Using the launcher
+
+### Home
+
+Your account/password fields and auto-login toggle live here, along with a live-rendered copy of
+this README and the changelog — so you can check what changed without leaving the app or digging
+through folders. Auto-login types your credentials directly (bypassing your keyboard layout, so a
+non-English layout can't garble your password) and waits for the client to actually finish
+loading before it types, instead of guessing a fixed delay.
+
+### Tweaks
+
+Client-side quality-of-life patches, applied by rebuilding `WoW.exe` from an untouched backup
+every time you change something — never patching an already-patched file. Large Address Aware,
+widescreen field of view (shown in degrees, not raw radians), render/grass/nameplate distance,
+sound channels, sound-while-alt-tabbed, auto-loot, and a camera rotation glitch fix are all here,
+most with a slider *and* a type-in box for the exact value you want. Every change applies the
+moment you make it — there's no "Save" button to remember.
+
+### DLLs
+
+Two lists, side by side: the DLLs the launcher actually injects on launch (in load order, top to
+bottom — drag them into place with the move buttons), and DLLs sitting in your game folder that
+aren't tracked yet. Each entry shows its version, author, and description where the file itself
+provides that information, so you're not guessing what `d3d9.dll` actually is from the name alone.
+Add a detected DLL to start tracking it, or ignore one permanently if it's not meant to be
+injected (a framework DLL, say) — ignored files stay out of the detected list until you
+un-ignore them from Settings.
+
+### MPQ Patches
+
+Custom `patch-A.mpq` … `patch-Z.mpq` archives in your `Data\` folder, toggled on and off with
+checkboxes (an unchecked patch is simply renamed with a leading underscore, so it's inert but not
+deleted). Blizzard's own base-game archives are never shown or touched.
+
+### Addons
+
+Install addons the way that's actually convenient: paste a GitHub repo link, a direct archive
+URL, or point at a `.zip`/`.rar`/`.7z` you already downloaded. Addon names render with their real
+in-game color codes, and versions come straight from each addon's own `.toc` file rather than a
+GitHub release tag. Hitting **Refresh** does everything at once — checks every tracked addon for
+updates, and picks up any folder you dropped into `Interface\AddOns` by hand, prompting you before
+adopting anything that might conflict with what's already tracked.
+
+### Settings
+
+The one place for launcher-level configuration: your install directory, realmlist, client
+download URL (only needed if you're not using the default), and the auto-login delay fallback.
+**Repair Game Files** re-downloads and reinstalls the whole client from the source URL, overwriting
+anything that differs locally — useful if something's gotten corrupted and you don't want to track
+down which file. Ignored DLLs (see the DLLs tab above) are managed here too, individually or all
+at once.
+
+### Log
+
+A running, live log of everything the launcher does — patching, injection, downloads, addon
+installs — for when something doesn't go as expected and you want to see exactly what happened.
 
 ## Requirements
 
@@ -41,13 +89,6 @@ time, automatically skipping anything that hasn't changed since last time.
   (x86) — or build from source with the .NET 10 SDK.
 - A vanilla 1.12.1 (build 5875) client. The launcher can download one for you if you don't have
   one yet.
-
-## Getting started
-
-1. Place the launcher in (or point it at, from the Settings tab) your World of Warcraft folder.
-2. Set your realmlist, and optionally your account and password for auto-login.
-3. Hit the big button. If there's no client yet, it'll say **Install** — pick a folder and it
-   downloads and sets everything up. Otherwise, it says **Play**.
 
 ## Building from source
 
@@ -71,7 +112,7 @@ own code.
 
 ## Project status
 
-Version 1.0.0. See [CHANGELOG.md](CHANGELOG.md) for the history. Versions follow
+Version 1.6.1. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
 ## License

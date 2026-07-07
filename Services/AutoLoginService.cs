@@ -9,18 +9,30 @@ namespace TeronWoWLauncher.Services;
 
 /// <summary>
 /// Types the account name and password into the WoW login screen after launch, then presses
-/// Enter. Our own implementation of the AutoLogin approach: find the game's visible window, focus
-/// it, and synthesize keystrokes with SendInput. Improved over the reference by using VkKeyScan's
-/// full shift state so passwords containing shifted symbols (!, @, etc.) type correctly, not just
-/// upper-case letters.
+/// Enter. Our own implementation of the AutoLogin approach: find the game's visible window, keep
+/// it focused while it loads, wait for loading to actually finish, and synthesize the credentials.
 ///
-/// Note: like any SendInput-based login, the game window must be able to take the foreground, and
-/// the account-name field must have focus (it does by default on the vanilla login screen). The
-/// configurable delay covers the gap between the window first appearing and the login screen
-/// actually becoming interactive.
+/// Characters are typed with SendInput's KEYEVENTF_UNICODE flag, which delivers the literal
+/// character directly rather than a virtual-key press translated through a keyboard layout. A
+/// VK-based approach (looking up which key produces a character on the *current* layout) breaks
+/// as soon as the system's active layout isn't English: letters either come out wrong or can't be
+/// found at all and get silently dropped, corrupting the password and tripping the client's
+/// failed-login lockout. Unicode injection sidesteps layout translation entirely, so this works
+/// the same regardless of what keyboard layout is active. Tab/Enter are still sent as real
+/// virtual-key presses since those are control keys, not characters — layout never affects them.
+///
+/// "Loading finished" is detected by polling the process's disk I/O counters: asset loading is
+/// I/O-heavy, an idle login screen is not, so a stretch of near-zero read/write activity is a
+/// reasonable, version-agnostic signal that the client is ready — instead of guessing a fixed
+/// delay that's wrong for any disk speed other than the one it was tuned on. The configured delay
+/// is kept only as a fallback for the rare case the I/O counters can't be read.
 /// </summary>
 public sealed class AutoLoginService
 {
+    private const int PollIntervalMs = 200;
+    private const int RequiredQuietSamples = 4;
+    private const ulong QuietThresholdBytes = 64 * 1024;
+
     private readonly Logger _log = Logger.Instance;
 
     public async Task PerformLoginAsync(
@@ -39,6 +51,8 @@ public sealed class AutoLoginService
 
         await Task.Run(() =>
         {
+            long deadline = Environment.TickCount64 + timeoutMs;
+
             _log.Info("Auto-login: waiting for the game window...");
             IntPtr hwnd = WaitForGameWindow(gameProcessId, timeoutMs, ct);
             if (hwnd == IntPtr.Zero)
@@ -47,9 +61,18 @@ public sealed class AutoLoginService
                 return;
             }
 
-            Thread.Sleep(Math.Max(0, delayMs));
+            User32.SetForegroundWindow(hwnd);
+
+            _log.Info("Auto-login: waiting for the client to finish loading...");
+            int remainingMs = (int)Math.Max(0, deadline - Environment.TickCount64);
+            if (!WaitForLoadingToSettle(gameProcessId, hwnd, remainingMs, ct))
+            {
+                _log.Warn("Auto-login: could not measure load activity; falling back to the configured delay.");
+                Thread.Sleep(Math.Max(0, delayMs));
+            }
             ct.ThrowIfCancellationRequested();
 
+            hwnd = FindVisibleWindowForProcess(gameProcessId) is var found && found != IntPtr.Zero ? found : hwnd;
             if (!User32.SetForegroundWindow(hwnd))
             {
                 _log.Warn("Auto-login: could not bring the game to the foreground; keystrokes may miss.");
@@ -67,6 +90,91 @@ public sealed class AutoLoginService
             PressVk(User32.VK_RETURN);
             _log.Info("Auto-login: credentials sent.");
         }, ct);
+    }
+
+    /// <summary>
+    /// Polls the process's disk I/O counters and the game window's foreground state until read/write
+    /// activity has stayed quiet for <see cref="RequiredQuietSamples"/> consecutive samples (a proxy
+    /// for "done loading assets"), re-asserting foreground focus on every sample so a loading screen
+    /// can't steal it away. Returns false if the counters can't be read at all, so the caller can fall
+    /// back to a fixed delay instead of proceeding with no wait whatsoever.
+    /// </summary>
+    private bool WaitForLoadingToSettle(int pid, IntPtr hwnd, int timeoutMs, CancellationToken ct)
+    {
+        // Opened with the minimal right GetProcessIoCounters actually needs, rather than going
+        // through System.Diagnostics.Process.Handle (which requests full PROCESS_ALL_ACCESS and can
+        // be denied even for a process we just created ourselves).
+        IntPtr hProcess = Kernel32.OpenProcess(Kernel32.PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
+        if (hProcess == IntPtr.Zero)
+        {
+            _log.Warn($"Auto-login: could not open the game process for load monitoring (Win32 error {Marshal.GetLastWin32Error()}).");
+            return false;
+        }
+
+        try
+        {
+            if (!TryGetIoCounters(hProcess, out ulong lastRead, out ulong lastWrite))
+            {
+                _log.Warn($"Auto-login: could not read the game process's I/O counters (Win32 error {Marshal.GetLastWin32Error()}).");
+                return false;
+            }
+
+            long deadline = Environment.TickCount64 + timeoutMs;
+            int quietSamples = 0;
+
+            while (Environment.TickCount64 < deadline)
+            {
+                ct.ThrowIfCancellationRequested();
+                Thread.Sleep(PollIntervalMs);
+
+                User32.SetForegroundWindow(hwnd);
+
+                if (!TryGetIoCounters(hProcess, out ulong read, out ulong write))
+                {
+                    _log.Warn($"Auto-login: could not read the game process's I/O counters (Win32 error {Marshal.GetLastWin32Error()}).");
+                    return false;
+                }
+
+                ulong deltaRead = read - lastRead;
+                ulong deltaWrite = write - lastWrite;
+                lastRead = read;
+                lastWrite = write;
+
+                if (deltaRead < QuietThresholdBytes && deltaWrite < QuietThresholdBytes)
+                {
+                    quietSamples++;
+                    if (quietSamples >= RequiredQuietSamples)
+                    {
+                        return true;
+                    }
+                }
+                else
+                {
+                    quietSamples = 0;
+                }
+            }
+        }
+        finally
+        {
+            Kernel32.CloseHandle(hProcess);
+        }
+
+        _log.Warn("Auto-login: load activity never went quiet before the timeout; proceeding anyway.");
+        return true;
+    }
+
+    private static bool TryGetIoCounters(IntPtr hProcess, out ulong read, out ulong write)
+    {
+        if (Kernel32.GetProcessIoCounters(hProcess, out Kernel32.IO_COUNTERS counters))
+        {
+            read = counters.ReadTransferCount;
+            write = counters.WriteTransferCount;
+            return true;
+        }
+
+        read = 0;
+        write = 0;
+        return false;
     }
 
     private IntPtr WaitForGameWindow(int pid, int timeoutMs, CancellationToken ct)
@@ -147,7 +255,7 @@ public sealed class AutoLoginService
         return children;
     }
 
-    private void SendString(string text)
+    private static void SendString(string text)
     {
         foreach (char ch in text)
         {
@@ -156,36 +264,37 @@ public sealed class AutoLoginService
         }
     }
 
-    private void SendChar(char ch)
+    private static void SendChar(char ch)
     {
-        short scan = User32.VkKeyScan(ch);
-        if (scan == -1)
-        {
-            _log.Warn($"Auto-login: character '{ch}' cannot be typed on the current keyboard layout; skipping it.");
-            return;
-        }
-
-        ushort vk = (ushort)(scan & 0xFF);
-        bool shift = ((scan >> 8) & 0x01) != 0;
-
-        if (shift)
-        {
-            SendKey(User32.VK_SHIFT, keyUp: false);
-        }
-
-        SendKey(vk, keyUp: false);
-        SendKey(vk, keyUp: true);
-
-        if (shift)
-        {
-            SendKey(User32.VK_SHIFT, keyUp: true);
-        }
+        SendUnicodeKey(ch, keyUp: false);
+        SendUnicodeKey(ch, keyUp: true);
     }
 
     private static void PressVk(ushort vk)
     {
         SendKey(vk, keyUp: false);
         SendKey(vk, keyUp: true);
+    }
+
+    private static void SendUnicodeKey(char ch, bool keyUp)
+    {
+        var input = new User32.INPUT
+        {
+            type = User32.INPUT_KEYBOARD,
+            U = new User32.InputUnion
+            {
+                ki = new User32.KEYBDINPUT
+                {
+                    wVk = 0,
+                    wScan = ch,
+                    dwFlags = User32.KEYEVENTF_UNICODE | (keyUp ? User32.KEYEVENTF_KEYUP : 0),
+                    time = 0,
+                    dwExtraInfo = IntPtr.Zero,
+                },
+            },
+        };
+
+        User32.SendInput(1, new[] { input }, Marshal.SizeOf<User32.INPUT>());
     }
 
     private static void SendKey(ushort vk, bool keyUp)

@@ -2,16 +2,57 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:markdig="clr-namespace:Markdig.Wpf;assembly=Markdig.Wpf"
-        Height="720" Width="820" MinHeight="400" MinWidth="480"
-        WindowStartupLocation="CenterOwner"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Height="720" Width="820"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
         Background="#1B1B1F">
+
+    <shell:WindowChrome.WindowChrome>
+        <!-- Same custom-chrome approach as MainWindow (see its own comment for the full rationale),
+             simplified: this dialog only ever needs a close button — no icon, title text, minimize,
+             or maximize/restore. Unlike MainWindow, this dialog's own outer shape is rounded
+             (CornerRadius 6, matching the inner card) rather than square — MainWindow's
+             CornerRadius="0" would otherwise suppress Windows 11's automatic corner rounding here
+             too, which reads oddly for a floating dialog. CaptionHeight="0" means no part of the
+             window is a draggable "caption" area — combined with ResizeMode="NoResize" (and
+             ResizeBorderThickness="0"), the dialog can't be moved or resized at all; it stays
+             exactly where CenterOwner placed it, at its XAML size. -->
+        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="0" GlassFrameThickness="0" CornerRadius="6"
+                             UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <!--
+          MarkdownViewer's default template (used everywhere else via CompactMarkdownViewer/plain
+          usage) shows a built-in zoom/print toolbar (IsToolBarVisible defaults to true) — an OS-
+          styled strip that clashes with this app's chrome and makes no sense floating over a
+          full-size document. This is otherwise the library's stock FlowDocumentScrollViewer
+          presentation (real scrollbars, unlike CompactMarkdownViewer's hidden ones), so its internal
+          ScrollViewer/ScrollBar still pick up the app-wide modern scrollbar style automatically.
+        -->
+        <Style x:Key="ExpandedMarkdownViewer" TargetType="{x:Type markdig:MarkdownViewer}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type markdig:MarkdownViewer}">
+                        <FlowDocumentScrollViewer Document="{TemplateBinding Document}" IsToolBarVisible="False"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
 
     <Window.CommandBindings>
         <CommandBinding Command="{x:Static markdig:Commands.Hyperlink}" Executed="OnHyperlink"/>
     </Window.CommandBindings>
 
-    <Border Margin="16" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1"
-            CornerRadius="6" Padding="16">
-        <markdig:MarkdownViewer x:Name="Viewer"/>
+    <!-- One seamless card for both the close button and the document — no separate header strip
+         with its own background/edge, so there's no visible seam between the two. -->
+    <Border Margin="16" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6">
+        <DockPanel>
+            <Button DockPanel.Dock="Top" Style="{StaticResource WindowCloseButtonStyle}" Content="&#xE8BB;"
+                    HorizontalAlignment="Right" Click="OnCloseClicked" ToolTip="Close"/>
+            <markdig:MarkdownViewer x:Name="Viewer" Style="{StaticResource ExpandedMarkdownViewer}"
+                                     PreviewMouseWheel="OnViewerPreviewMouseWheel" Margin="16,0,16,16"/>
+        </DockPanel>
     </Border>
 </Window>

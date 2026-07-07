@@ -2,8 +2,58 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:markdig="clr-namespace:Markdig.Wpf;assembly=Markdig.Wpf"
+             xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
+        <!--
+          The app's whole text hierarchy, in one place: one dedicated size/weight/color per role,
+          used identically on every tab and dialog instead of each screen inventing its own
+          FontSize/FontWeight/Foreground combination. Mirrors the Markdig heading scale below (H1=26,
+          H2=20, both gold/bold) so rendered Markdown and native UI chrome read as the same system.
+
+            Heading1Text — the app's own title (top-left corner). Rare; one per window at most.
+            Heading2Text — a screen's primary heading ("How to use", "Login", every dialog's title).
+            Heading3Text — a group label within a screen ("Installation directory", "Ignored DLLs").
+            BodyText     — plain body/field-label text. Apply explicitly (see BodyText below for why).
+            CaptionText  — secondary inline readouts (status line, realmlist label, addon version).
+            MicroText    — small explanatory blurbs under a heading (tab/dialog descriptions).
+
+          Most control types get an explicit FontFamily too, instead of relying on the implicit OS
+          default, so the font is a deliberate choice recorded in one place (AppFontFamily) rather
+          than an accident of whatever font a fresh WPF project happens to default to. TextBlock and
+          Button are the deliberate exceptions — see the BodyText and Button styles below for why.
+        -->
+        <FontFamily x:Key="AppFontFamily">Segoe UI</FontFamily>
+
+        <Style x:Key="Heading1Text" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
+            <Setter Property="FontSize" Value="30"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="#E6C067"/>
+        </Style>
+        <Style x:Key="Heading2Text" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
+            <Setter Property="FontSize" Value="20"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="#E6C067"/>
+        </Style>
+        <Style x:Key="Heading3Text" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#DADADD"/>
+        </Style>
+        <Style x:Key="CaptionText" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Foreground" Value="#8A8A92"/>
+        </Style>
+        <Style x:Key="MicroText" TargetType="{x:Type TextBlock}">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="#8A8A92"/>
+        </Style>
+
         <!--
           Markdig.Wpf renders headings with a hardcoded black Foreground and gives code spans a light
           gray background — both invisible/unreadable against this app's dark theme. These override the
@@ -11,10 +61,11 @@
           Themes/generic.xaml), which take precedence here since Application-level resources are
           resolved before a control's default theme dictionary. Kept at the Application level (not just
           MainWindow) so every window that shows a MarkdownViewer — including the expanded preview
-          dialog — gets the same readable colors.
+          dialog — gets the same readable colors. Sizes/colors here match Heading1Text/Heading2Text
+          above deliberately, so rendered Markdown headings read as the same tier as native ones.
         -->
         <Style TargetType="{x:Type FlowDocument}" x:Key="{x:Static markdig:Styles.DocumentStyleKey}">
-            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
             <Setter Property="Foreground" Value="#DADADD"/>
         </Style>
         <Style TargetType="{x:Type Paragraph}" x:Key="{x:Static markdig:Styles.Heading1StyleKey}">
@@ -74,11 +125,327 @@
         </Style>
 
         <!--
+          Every TextBlock/CheckBox/TextBox/PasswordBox/ListBox in the app, everywhere — defined once,
+          here, for the same reason as the Button style below: a per-window "TargetType=X" style
+          would shadow this one (Window resources are checked before Application resources), so no
+          window or dialog is allowed to define its own implicit style for these types anymore; only
+          per-instance overrides are set locally. TextBox/PasswordBox/ListBox get rounded corners
+          (CornerRadius 6) to match the Button style and the MarkdownViewer preview borders.
+        -->
+        <!--
+          Deliberately named, not implicit (TargetType with no x:Key): an implicit TextBlock style
+          applies to every TextBlock in the app, including the ones WPF auto-generates internally to
+          host a Button/RadioButton/CheckBox's plain string Content (e.g. an icon glyph's "&#xE921;",
+          or a nav label's "Home"). A Style setter always outranks inherited value in WPF's property
+          precedence order — regardless of how specific or high-precedence the ancestor's own value
+          is — so an implicit TextBlock style silently overrides whatever FontSize/Foreground/
+          FontFamily that control's own style meant its content to have (this bit both the icon fonts
+          and NavButtonStyle's FontSize/checked-color before this was made opt-in). Apply this
+          explicitly (Style="{StaticResource BodyText}") only on real standalone body text.
+        -->
+        <Style x:Key="BodyText" TargetType="{x:Type TextBlock}">
+            <Setter Property="Foreground" Value="#C8C8D0"/>
+            <Setter Property="FontSize" Value="14"/>
+        </Style>
+
+        <Style TargetType="{x:Type CheckBox}">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
+            <Setter Property="Foreground" Value="#DADADD"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Margin" Value="0,10,0,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type CheckBox}">
+                        <!--
+                          A horizontal StackPanel gives its children unconstrained width during
+                          measure, so a long label never wraps — it just overflows and gets clipped by
+                          whatever ancestor happens to cut it off. A Grid column constrains the content
+                          column to the actual available width, so TextWrapping (enabled below, scoped
+                          to this ContentPresenter's own generated text) can actually take effect —
+                          this only affects the label's own line breaks, not how wide any ancestor
+                          container is willing to be.
+                        -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid Grid.Column="0" Width="18" Height="18" VerticalAlignment="Top" Margin="0,2,0,0">
+                                <Border x:Name="Bd" Background="#26262B" BorderBrush="#4A4A54"
+                                        BorderThickness="1" CornerRadius="4" SnapsToDevicePixels="True"/>
+                                <TextBlock x:Name="Check" Text="&#xE73E;" FontFamily="Segoe Fluent Icons"
+                                           FontSize="11" Foreground="#1B1B1F" HorizontalAlignment="Center"
+                                           VerticalAlignment="Center" Opacity="0"/>
+                            </Grid>
+                            <ContentPresenter Grid.Column="1" x:Name="Content" Margin="8,0,0,0"
+                                              VerticalAlignment="Center" RecognizesAccessKey="True">
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="{x:Type TextBlock}">
+                                        <Setter Property="TextWrapping" Value="Wrap"/>
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#E6C067"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#E6C067"/>
+                                <Setter TargetName="Check" Property="Opacity" Value="1"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#E6C067"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Content" Property="Opacity" Value="0.5"/>
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="{x:Type TextBox}">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
+            <Setter Property="Background" Value="#26262B"/>
+            <Setter Property="Foreground" Value="#EDEDED"/>
+            <Setter Property="BorderBrush" Value="#3A3A42"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="5,4"/>
+            <Setter Property="CaretBrush" Value="#EDEDED"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type TextBox}">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6" SnapsToDevicePixels="True">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="BorderBrush" Value="#5E5E6A"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter Property="BorderBrush" Value="#E6C067"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.55"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="{x:Type PasswordBox}">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
+            <Setter Property="Background" Value="#26262B"/>
+            <Setter Property="Foreground" Value="#EDEDED"/>
+            <Setter Property="BorderBrush" Value="#3A3A42"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="5,4"/>
+            <Setter Property="CaretBrush" Value="#EDEDED"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type PasswordBox}">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6" SnapsToDevicePixels="True">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="BorderBrush" Value="#5E5E6A"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter Property="BorderBrush" Value="#E6C067"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="{x:Type ListBox}">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
+            <Setter Property="Background" Value="#101014"/>
+            <Setter Property="Foreground" Value="#DADADD"/>
+            <Setter Property="BorderBrush" Value="#3A3A42"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="4"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ListBox}">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6" SnapsToDevicePixels="True">
+                            <ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}">
+                                <ItemsPresenter/>
+                            </ScrollViewer>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!--
+          Custom window-control buttons (minimize/maximize/close), app-wide — used by any window with
+          its own WindowChrome and custom title row (MainWindow, MarkdownPreviewDialog): no background
+          fill ever, same treatment as MainWindow's nav labels — only the glyph's Foreground changes on
+          hover. Close gets its own style so its hover color can be a soft red instead of white, the
+          one universally-expected exception to "no background" feedback.
+        -->
+        <Style x:Key="WindowControlButtonStyle" TargetType="{x:Type Button}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#9A9AA2"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="Width" Value="68"/>
+            <Setter Property="Height" Value="52"/>
+            <Setter Property="Cursor" Value="Arrow"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border Background="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="WindowCloseButtonStyle" TargetType="{x:Type Button}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#9A9AA2"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="Width" Value="68"/>
+            <Setter Property="Height" Value="52"/>
+            <Setter Property="Cursor" Value="Arrow"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border Background="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="#E5484D"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!--
+          Modern flat scrollbars (thin, borderless track, rounded thumb), app-wide — previously scoped
+          to MainWindow's own Window.Resources despite its comment claiming otherwise, so every dialog
+          (MarkdownPreviewDialog included) actually fell back to the OS's default scrollbar chrome.
+        -->
+        <Style x:Key="ModernScrollBarThumb" TargetType="{x:Type Thumb}">
+            <Setter Property="Background" Value="#4A4A54"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Thumb}">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="5" Margin="2"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#5E5E6A"/>
+                </Trigger>
+                <Trigger Property="IsDragging" Value="True">
+                    <Setter Property="Background" Value="#E6C067"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ModernScrollRepeatButton" TargetType="{x:Type RepeatButton}">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type RepeatButton}">
+                        <Rectangle Fill="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="{x:Type ScrollBar}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ScrollBar}">
+                        <Track x:Name="PART_Track" IsDirectionReversed="True" Orientation="Vertical">
+                            <Track.DecreaseRepeatButton>
+                                <RepeatButton Style="{StaticResource ModernScrollRepeatButton}" Command="ScrollBar.PageUpCommand"/>
+                            </Track.DecreaseRepeatButton>
+                            <Track.IncreaseRepeatButton>
+                                <RepeatButton Style="{StaticResource ModernScrollRepeatButton}" Command="ScrollBar.PageDownCommand"/>
+                            </Track.IncreaseRepeatButton>
+                            <Track.Thumb>
+                                <Thumb Style="{StaticResource ModernScrollBarThumb}"/>
+                            </Track.Thumb>
+                        </Track>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Width" Value="Auto"/>
+                    <Setter Property="Height" Value="10"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="{x:Type ScrollBar}">
+                                <Track x:Name="PART_Track" Orientation="Horizontal">
+                                    <Track.DecreaseRepeatButton>
+                                        <RepeatButton Style="{StaticResource ModernScrollRepeatButton}" Command="ScrollBar.PageLeftCommand"/>
+                                    </Track.DecreaseRepeatButton>
+                                    <Track.IncreaseRepeatButton>
+                                        <RepeatButton Style="{StaticResource ModernScrollRepeatButton}" Command="ScrollBar.PageRightCommand"/>
+                                    </Track.IncreaseRepeatButton>
+                                    <Track.Thumb>
+                                        <Thumb Style="{StaticResource ModernScrollBarThumb}"/>
+                                    </Track.Thumb>
+                                </Track>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!--
           Every button in the app, everywhere (MainWindow and every dialog) — defined once, here, so
           nothing shadows it. A per-window "TargetType=Button" style would take precedence over this
           one (Window resources are checked before Application resources), so no window is allowed to
           define its own implicit Button style anymore; only per-instance overrides (e.g. a Play
           button's own Background) are set locally.
+
+          No FontFamily setter here deliberately: a Button's plain string Content (an icon glyph, a
+          label) is hosted by an internally-generated TextBlock that inherits FontFamily from this
+          Button. IconButtonStyle relies on exactly that inheritance for "Segoe Fluent Icons" — see
+          the BodyText style's comment above for why a Setter here would be worse than no Setter.
 
           Replaces the OS's default Fluent/Aero2 button chrome — which shows a generic light/blue
           overlay on hover that clashed with this app's dark, gold-accented theme — with our own: a
