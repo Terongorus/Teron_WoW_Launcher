@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -746,6 +747,12 @@ public partial class MainWindow : Window
 
     private void OnRefreshMpq(object sender, RoutedEventArgs e) => RefreshMpqList();
 
+    // The MPQ Patches tab's visible scrollbar is a standalone ScrollBar (see MainWindow.xaml) rather
+    // than MpqScrollViewer's own — that keeps it in a dedicated Grid column shared with the pinned
+    // header, so the two never drift out of alignment. Dragging/clicking it only moves its own Value;
+    // this is what actually applies that to the ScrollViewer it's bound to.
+    private void OnMpqScrollBarScroll(object sender, ScrollEventArgs e) => MpqScrollViewer.ScrollToVerticalOffset(e.NewValue);
+
     private void OnSelectAllMpq(object sender, RoutedEventArgs e) => SetAllMpqEnabled(true);
 
     private void OnDeselectAllMpq(object sender, RoutedEventArgs e) => SetAllMpqEnabled(false);
@@ -826,6 +833,11 @@ public partial class MainWindow : Window
         {
             _addonItems.Add(addon);
         }
+
+        // InstalledAddon doesn't raise property-change notifications, so nothing binds to this
+        // directly — recomputed here, the one place the addon list is (re)built from, instead of at
+        // every call site that might change HasUpdateAvailable.
+        UpdateAllAddonsButton.IsEnabled = _addonItems.Any(a => a.HasUpdateAvailable);
     }
 
     private async void OnOpenAddAddonDialog(object sender, RoutedEventArgs e)
@@ -885,7 +897,20 @@ public partial class MainWindow : Window
         try
         {
             string markdown = await _addons.GetDetailsMarkdownAsync(addon, CurrentWowDir(), CancellationToken.None);
-            ShowModal(new MarkdownPreviewDialog(title, markdown));
+            var dialog = new AddonDetailsDialog(title, markdown, addon.IgnoreUpdates);
+            ShowModal(dialog);
+
+            if (dialog.IgnoreUpdates != addon.IgnoreUpdates)
+            {
+                addon.IgnoreUpdates = dialog.IgnoreUpdates;
+                if (addon.IgnoreUpdates)
+                {
+                    addon.HasUpdateAvailable = false;
+                }
+
+                _addons.Save();
+                RefreshAddonList();
+            }
         }
         finally
         {
@@ -899,6 +924,45 @@ public partial class MainWindow : Window
         {
             await AddAddonAsync(addon.SourceRef);
         }
+    }
+
+    /// <summary>Updates every addon currently flagged as updatable, one at a time, reusing the same
+    /// install/update path as the per-row Update button (including its single-flight guard).</summary>
+    private async void OnUpdateAllAddonsClick(object sender, RoutedEventArgs e)
+    {
+        List<InstalledAddon> updatable = _addons.Addons
+            .Where(a => a.HasUpdateAvailable && !string.IsNullOrWhiteSpace(a.SourceRef))
+            .ToList();
+
+        if (updatable.Count == 0)
+        {
+            AddonStatusText.Text = "No addon updates available.";
+            return;
+        }
+
+        foreach (InstalledAddon addon in updatable)
+        {
+            await AddAddonAsync(addon.SourceRef!);
+        }
+
+        AddonStatusText.Text = $"Updated {updatable.Count} addon(s).";
+    }
+
+    // The Addons tab's visible scrollbar is a standalone ScrollBar (see MainWindow.xaml) rather than
+    // AddonScrollViewer's own — that keeps it in a dedicated Grid column shared with the pinned header,
+    // so the two never drift out of alignment. Dragging/clicking it only moves its own Value; this is
+    // what actually applies that to the ScrollViewer it's bound to.
+    private void OnAddonScrollBarScroll(object sender, ScrollEventArgs e) => AddonScrollViewer.ScrollToVerticalOffset(e.NewValue);
+
+    // AddonList is a ListBox, which always carries its own internal ScrollViewer even with its
+    // scrollbar visibility set to Disabled — that inner ScrollViewer still claims (marks Handled) any
+    // mouse wheel input over the list, so it never reaches AddonScrollViewer above it. Intercepting the
+    // wheel here, before the ListBox's own handler runs, and driving AddonScrollViewer directly is the
+    // standard workaround for this nested-ScrollViewer wheel-eating behavior.
+    private void OnAddonListPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        AddonScrollViewer.ScrollToVerticalOffset(AddonScrollViewer.VerticalOffset - e.Delta);
+        e.Handled = true;
     }
 
     /// <summary>

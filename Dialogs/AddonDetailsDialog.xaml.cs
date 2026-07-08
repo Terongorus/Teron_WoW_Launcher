@@ -5,17 +5,25 @@ using TeronWoWLauncher.Services;
 
 namespace TeronWoWLauncher.Dialogs;
 
-/// <summary>Shows a Markdown string full-size, with normal scrolling — opened from a compact preview.</summary>
-public partial class MarkdownPreviewDialog : Window
+/// <summary>
+/// Shows an addon's README/.toc details full-size, with a checkbox to opt that addon out of update
+/// notifications. The checkbox's final state is only read by the caller after the dialog closes
+/// (via <see cref="IgnoreUpdates"/>) — there's no separate Save/OK button, matching every other
+/// close-only dialog in the app.
+/// </summary>
+public partial class AddonDetailsDialog : Window
 {
-    public MarkdownPreviewDialog(string title, string markdown)
+    public AddonDetailsDialog(string title, string markdown, bool ignoreUpdates)
     {
         InitializeComponent();
         Title = title;
         Viewer.Markdown = markdown;
+        IgnoreUpdatesCheck.IsChecked = ignoreUpdates;
         WindowChromeHelper.FixMaximizedBounds(this);
         MarkdownScrollHelper.AttachFastScroll(Viewer);
     }
+
+    public bool IgnoreUpdates => IgnoreUpdatesCheck.IsChecked == true;
 
     private void OnCloseClicked(object sender, RoutedEventArgs e) => Close();
 

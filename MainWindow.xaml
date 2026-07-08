@@ -26,6 +26,7 @@
 
   <Window.Resources>
     <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    <svc:ScrollableToVisibilityConverter x:Key="ScrollableToVis"/>
 
     <!-- The app-wide TextBlock/CheckBox/TextBox/PasswordBox/ListBox/Button/window-control-button
          styles (App.xaml) cover this window too — no local overrides here. -->
@@ -249,8 +250,7 @@
       <!-- 1: Tweaks (executable patches) -->
       <TabItem d:IsHidden="True">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-          <Border MaxWidth="620" Margin="24" HorizontalAlignment="Center"
-                  Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6" Padding="24">
+          <Border Style="{StaticResource PageCardStyle}">
             <StackPanel>
               <TextBlock Style="{StaticResource Heading3Text}"
                                      Text="Executable tweaks (rebuilt from a pristine backup, in fixed order)"
@@ -328,122 +328,203 @@
 
       <!-- 3: MPQ Patches -->
       <TabItem d:IsHidden="True">
-        <Grid Margin="16">
+        <!-- Column 1 is what actually keeps the header and list cards aligned: it's reserved for the
+             standalone scrollbar in Row 1, and since a Grid's columns are shared by every row in that
+             same Grid, Row 0's own (empty) Column 1 cell is automatically forced to that exact same
+             width — no guessed pixel constant, so it can't drift no matter how wide the real scrollbar
+             renders. Both cards live in Column 0 only, so they always share one identical width. -->
+        <Grid>
           <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
           </Grid.RowDefinitions>
-          <StackPanel Grid.Row="0" Margin="0,0,0,8">
-            <TextBlock Style="{StaticResource Heading3Text}" Text="Custom MPQ patches in Data\ (patch-A.mpq … patch-Z.mpq)"/>
-            <TextBlock Style="{StaticResource MicroText}" Text="Uncheck to disable (renames to _patch-X.mpq). Base Blizzard patches are not shown."/>
-          </StackPanel>
-          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnAddMpq"
-                    ToolTip="Add a custom MPQ patch"/>
-            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshMpq" Margin="8,0,0,0"
-                    ToolTip="Rescan Data\ for custom MPQ patches"/>
-            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE73A;" Click="OnSelectAllMpq" Margin="8,0,0,0"
-                    ToolTip="Enable all patches"/>
-            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE711;" Click="OnDeselectAllMpq" Margin="8,0,0,0"
-                    ToolTip="Disable all patches"/>
-          </StackPanel>
-          <Border Grid.Row="2" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1">
-            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="8">
-              <StackPanel x:Name="MpqPanel"/>
-            </ScrollViewer>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+
+          <!-- Pinned top of the card: title, microtext, buttons. Never scrolls. -->
+          <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource PageCardTopStyle}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource Heading3Text}" Text="Custom MPQ patches in Data\ (patch-A.mpq … patch-Z.mpq)"/>
+              <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,8"
+                         Text="Uncheck to disable (renames to _patch-X.mpq). Base Blizzard patches are not shown."/>
+              <StackPanel Orientation="Horizontal">
+                <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnAddMpq"
+                        ToolTip="Add a custom MPQ patch"/>
+                <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshMpq" Margin="8,0,0,0"
+                        ToolTip="Rescan Data\ for custom MPQ patches"/>
+                <Button Style="{StaticResource IconButtonStyle}" Content="&#xE73A;" Click="OnSelectAllMpq" Margin="8,0,0,0"
+                        ToolTip="Enable all patches"/>
+                <Button Style="{StaticResource IconButtonStyle}" Content="&#xE711;" Click="OnDeselectAllMpq" Margin="8,0,0,0"
+                        ToolTip="Disable all patches"/>
+              </StackPanel>
+            </StackPanel>
           </Border>
+
+          <!-- Bottom of the card: the patch list. This ScrollViewer's own scrollbar is hidden (it still
+               scrolls via mouse wheel/keyboard, just doesn't draw its own UI) and it spans Column 0
+               edge to edge, so the wheel scrolls the list from anywhere over that whole region — a real
+               page-wide scroll area, not one scoped to hovering over the narrower card. The visible
+               scrollbar is the standalone ScrollBar in Column 1 below, bound to this ScrollViewer.
+               PageCardBottomStyle's Border is Auto-height/top-aligned, so a short list produces a short
+               card (no forced fill-to-bottom dead space); a long list grows past the row's available
+               height and scrolling kicks in, header unmoved. -->
+          <ScrollViewer x:Name="MpqScrollViewer" Grid.Row="1" Grid.Column="0" VerticalScrollBarVisibility="Hidden">
+            <Border Style="{StaticResource PageCardBottomStyle}">
+              <StackPanel x:Name="MpqPanel"/>
+            </Border>
+          </ScrollViewer>
+          <ScrollBar Grid.Row="1" Grid.Column="1" Orientation="Vertical" Margin="0,0,0,24"
+                     Value="{Binding ElementName=MpqScrollViewer, Path=VerticalOffset, Mode=OneWay}"
+                     Maximum="{Binding ElementName=MpqScrollViewer, Path=ScrollableHeight}"
+                     ViewportSize="{Binding ElementName=MpqScrollViewer, Path=ViewportHeight}"
+                     LargeChange="{Binding ElementName=MpqScrollViewer, Path=ViewportHeight}"
+                     Visibility="{Binding ElementName=MpqScrollViewer, Path=ScrollableHeight, Converter={StaticResource ScrollableToVis}}"
+                     Scroll="OnMpqScrollBarScroll"/>
         </Grid>
       </TabItem>
 
       <!-- 4: Addons -->
       <TabItem d:IsHidden="True">
-        <Grid Margin="16">
+        <!-- Column 1 is what actually keeps the header and list cards aligned: it's reserved for the
+             standalone scrollbar in Row 1, and since a Grid's columns are shared by every row in that
+             same Grid, Row 0's own (empty) Column 1 cell is automatically forced to that exact same
+             width — no guessed pixel constant, so it can't drift no matter how wide the real scrollbar
+             renders. Both cards live in Column 0 only, so they always share one identical width. -->
+        <Grid>
           <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
           </Grid.RowDefinitions>
-          <StackPanel Grid.Row="0" Margin="0,0,0,8">
-            <TextBlock Style="{StaticResource Heading3Text}" Text="Addons (installed into Interface\AddOns)"/>
-            <TextBlock Style="{StaticResource MicroText}" Text="Add by GitHub repo URL, a direct archive URL, or a local .zip/.rar/.7z file."/>
-          </StackPanel>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
 
-          <Grid Grid.Row="1" Margin="0,0,0,8">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0" Orientation="Horizontal">
-              <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnOpenAddAddonDialog"
-                      ToolTip="Add an addon"/>
-              <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshAddons" Margin="8,0,0,0"
-                      ToolTip="Refresh: reload, adopt local addons, and check for updates"/>
-              <TextBlock x:Name="AddonStatusText" Style="{StaticResource CaptionText}" VerticalAlignment="Center" Margin="12,0,0,0"/>
-            </StackPanel>
-            <Grid Grid.Column="1" Width="260" VerticalAlignment="Center">
-              <TextBox x:Name="AddonSearchBox" Padding="5,4,24,4" TextChanged="OnAddonSearchTextChanged"
-                       PreviewKeyDown="OnAddonSearchKeyDown" GotFocus="OnAddonSearchFocusChanged"
-                       LostFocus="OnAddonSearchFocusChanged" ToolTip="Search addons by name"/>
-              <TextBlock x:Name="AddonSearchPlaceholder" Style="{StaticResource MicroText}"
-                         Text="Search Addons" IsHitTestVisible="False" VerticalAlignment="Center" Margin="5,0,0,0"/>
-              <Button Content="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="10" Foreground="#E5484D"
-                      Background="Transparent" BorderThickness="0" Padding="0" Cursor="Arrow"
-                      Width="18" Height="18" HorizontalAlignment="Right" VerticalAlignment="Center"
-                      Margin="0,0,3,0" Click="OnClearAddonSearch" ToolTip="Clear search">
-                <Button.Style>
-                  <Style TargetType="{x:Type Button}" BasedOn="{StaticResource {x:Type Button}}">
-                    <Style.Triggers>
-                      <DataTrigger Binding="{Binding ElementName=AddonSearchBox, Path=Text.Length}" Value="0">
-                        <Setter Property="Visibility" Value="Collapsed"/>
-                      </DataTrigger>
-                    </Style.Triggers>
-                  </Style>
-                </Button.Style>
-              </Button>
-            </Grid>
-          </Grid>
+          <!-- Pinned top of the card: title, microtext, Add/Refresh/Update All/search row. Never scrolls. -->
+          <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource PageCardTopStyle}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource Heading3Text}" Text="Addons (installed into Interface\AddOns)"/>
+              <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,8"
+                         Text="Add by GitHub repo URL, a direct archive URL, or a local .zip/.rar/.7z file."/>
 
-          <ListBox Grid.Row="2" x:Name="AddonList" HorizontalContentAlignment="Stretch">
-            <ListBox.ItemTemplate>
-              <DataTemplate>
-                <Grid Margin="0,4">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                  </Grid.ColumnDefinitions>
-
-                  <Button Grid.Column="0" Style="{StaticResource GhostIconButtonStyle}" Content="&#xE946;"
-                          Tag="{Binding}" Click="OnAddonDetailsClick" ToolTip="View details"
-                          Margin="0,0,8,0"/>
-
-                  <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Style="{StaticResource BodyText}" svc:WowColoredText.Text="{Binding Name}" VerticalAlignment="Center"/>
-                    <TextBlock Text="{Binding VersionDisplay}" Style="{StaticResource CaptionText}"
-                               Margin="8,0,0,0" VerticalAlignment="Center"/>
-                  </StackPanel>
-
-                  <Button Grid.Column="2" Style="{StaticResource IconButtonStyle}" Content="&#xE896;"
-                          Tag="{Binding}" Click="OnUpdateAddonClick" ToolTip="Update this addon"
-                          Visibility="{Binding HasUpdateAvailable, Converter={StaticResource BoolToVis}}"
-                          Margin="8,0,0,0" Width="28" Height="28" Background="#2E6DA4"/>
-                  <Button Grid.Column="3" Style="{StaticResource IconButtonStyle}" Content="&#xE74D;"
-                          Tag="{Binding}" Click="OnRemoveAddonClick" ToolTip="Remove this addon"
-                          Margin="8,0,0,0" Width="28" Height="28"/>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                  <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnOpenAddAddonDialog"
+                          ToolTip="Add an addon"/>
+                  <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshAddons" Margin="8,0,0,0"
+                          ToolTip="Refresh: reload, adopt local addons, and check for updates"/>
+                  <Button x:Name="UpdateAllAddonsButton" Content="&#xE896;"
+                          Click="OnUpdateAllAddonsClick" Margin="8,0,0,0" IsEnabled="False"
+                          ToolTip="Update every addon with an available update">
+                    <Button.Style>
+                      <!-- Blue only applies via this IsEnabled trigger, not a local Background value —
+                           a local value would outrank the base style's own disabled-state handling, so
+                           the accent would stay fully saturated even while disabled. -->
+                      <Style TargetType="{x:Type Button}" BasedOn="{StaticResource IconButtonStyle}">
+                        <Style.Triggers>
+                          <Trigger Property="IsEnabled" Value="True">
+                            <Setter Property="Background" Value="#2E6DA4"/>
+                          </Trigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Button.Style>
+                  </Button>
+                  <TextBlock x:Name="AddonStatusText" Style="{StaticResource CaptionText}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                </StackPanel>
+                <Grid Grid.Column="1" Width="260" VerticalAlignment="Center">
+                  <TextBox x:Name="AddonSearchBox" Padding="5,4,24,4" TextChanged="OnAddonSearchTextChanged"
+                           PreviewKeyDown="OnAddonSearchKeyDown" GotFocus="OnAddonSearchFocusChanged"
+                           LostFocus="OnAddonSearchFocusChanged" ToolTip="Search addons by name"/>
+                  <TextBlock x:Name="AddonSearchPlaceholder" Style="{StaticResource MicroText}"
+                             Text="Search Addons" IsHitTestVisible="False" VerticalAlignment="Center" Margin="5,0,0,0"/>
+                  <Button Content="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="10" Foreground="#E5484D"
+                          Background="Transparent" BorderThickness="0" Padding="0" Cursor="Arrow"
+                          Width="18" Height="18" HorizontalAlignment="Right" VerticalAlignment="Center"
+                          Margin="0,0,3,0" Click="OnClearAddonSearch" ToolTip="Clear search">
+                    <Button.Style>
+                      <Style TargetType="{x:Type Button}" BasedOn="{StaticResource {x:Type Button}}">
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding ElementName=AddonSearchBox, Path=Text.Length}" Value="0">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Button.Style>
+                  </Button>
                 </Grid>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
+              </Grid>
+            </StackPanel>
+          </Border>
+
+          <!-- Bottom of the card: the addon list. This ScrollViewer's own scrollbar is hidden (it still
+               scrolls via mouse wheel/keyboard, just doesn't draw its own UI) and it spans Column 0
+               edge to edge, so the wheel scrolls the list from anywhere over that whole region — a real
+               page-wide scroll area, not one scoped to hovering over the narrower card. The visible
+               scrollbar is the standalone ScrollBar in Column 1 below, bound to this ScrollViewer.
+               PageCardBottomStyle's Border is Auto-height/top-aligned, so a short list produces a short
+               card (no forced fill-to-bottom dead space); a long list grows past the row's available
+               height and scrolling kicks in, header unmoved. AddonList's own internal scrollbar is
+               explicitly disabled so it never fights with this one; with nothing constraining its
+               height it simply lays out every row at full size instead. -->
+          <ScrollViewer x:Name="AddonScrollViewer" Grid.Row="1" Grid.Column="0" VerticalScrollBarVisibility="Hidden">
+            <Border Style="{StaticResource PageCardBottomStyle}">
+              <ListBox x:Name="AddonList" HorizontalContentAlignment="Stretch"
+                       ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                       ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                       PreviewMouseWheel="OnAddonListPreviewMouseWheel">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <Grid Margin="0,4">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+
+                      <Button Grid.Column="0" Style="{StaticResource GhostIconButtonStyle}" Content="&#xE946;"
+                              Tag="{Binding}" Click="OnAddonDetailsClick" ToolTip="View details"
+                              Margin="0,0,8,0"/>
+
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Style="{StaticResource BodyText}" svc:WowColoredText.Text="{Binding Name}" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding VersionDisplay}" Style="{StaticResource CaptionText}"
+                                   Margin="8,0,0,0" VerticalAlignment="Center"/>
+                      </StackPanel>
+
+                      <Button Grid.Column="2" Style="{StaticResource IconButtonStyle}" Content="&#xE896;"
+                              Tag="{Binding}" Click="OnUpdateAddonClick" ToolTip="Update this addon"
+                              Visibility="{Binding HasUpdateAvailable, Converter={StaticResource BoolToVis}}"
+                              Margin="8,0,0,0" Width="28" Height="28" Background="#2E6DA4"/>
+                      <Button Grid.Column="3" Style="{StaticResource IconButtonStyle}" Content="&#xE74D;"
+                              Tag="{Binding}" Click="OnRemoveAddonClick" ToolTip="Remove this addon"
+                              Margin="8,0,0,0" Width="28" Height="28"/>
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </Border>
+          </ScrollViewer>
+          <ScrollBar Grid.Row="1" Grid.Column="1" Orientation="Vertical" Margin="0,0,0,24"
+                     Value="{Binding ElementName=AddonScrollViewer, Path=VerticalOffset, Mode=OneWay}"
+                     Maximum="{Binding ElementName=AddonScrollViewer, Path=ScrollableHeight}"
+                     ViewportSize="{Binding ElementName=AddonScrollViewer, Path=ViewportHeight}"
+                     LargeChange="{Binding ElementName=AddonScrollViewer, Path=ViewportHeight}"
+                     Visibility="{Binding ElementName=AddonScrollViewer, Path=ScrollableHeight, Converter={StaticResource ScrollableToVis}}"
+                     Scroll="OnAddonScrollBarScroll"/>
         </Grid>
       </TabItem>
 
       <!-- 5: Settings -->
       <TabItem d:IsHidden="True">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-          <Border MaxWidth="620" Margin="24" HorizontalAlignment="Center"
-                  Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6" Padding="24">
+          <Border Style="{StaticResource PageCardStyle}">
             <StackPanel>
               <TextBlock Style="{StaticResource Heading3Text}" Text="Installation directory"/>
               <TextBlock Style="{StaticResource MicroText}" Text="The folder containing WoW.exe. If you moved your install, browse to the new location."

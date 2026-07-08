@@ -1,4 +1,4 @@
-<Window x:Class="TeronWoWLauncher.Dialogs.MarkdownPreviewDialog"
+<Window x:Class="TeronWoWLauncher.Dialogs.AddonDetailsDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:markdig="clr-namespace:Markdig.Wpf;assembly=Markdig.Wpf"
@@ -8,15 +8,9 @@
         Background="#1B1B1F">
 
     <shell:WindowChrome.WindowChrome>
-        <!-- Same custom-chrome approach as MainWindow (see its own comment for the full rationale),
-             simplified: this dialog only ever needs a close button — no icon, title text, minimize,
-             or maximize/restore. Unlike MainWindow, this dialog's own outer shape is rounded
-             (CornerRadius 6, matching the inner card) rather than square — MainWindow's
-             CornerRadius="0" would otherwise suppress Windows 11's automatic corner rounding here
-             too, which reads oddly for a floating dialog. CaptionHeight="0" means no part of the
-             window is a draggable "caption" area — combined with ResizeMode="NoResize" (and
-             ResizeBorderThickness="0"), the dialog can't be moved or resized at all; it stays
-             exactly where CenterOwner placed it, at its XAML size. -->
+        <!-- Same close-only, locked custom chrome as every other dialog (see MarkdownPreviewDialog's
+             own comment for the full rationale) — no icon/title text/minimize/maximize, fixed size
+             and position, rounded outer corners matching the inner card. -->
         <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="0" GlassFrameThickness="0" CornerRadius="6"
                              UseAeroCaptionButtons="False"/>
     </shell:WindowChrome.WindowChrome>
@@ -27,12 +21,16 @@
         <CommandBinding Command="{x:Static markdig:Commands.Hyperlink}" Executed="OnHyperlink"/>
     </Window.CommandBindings>
 
-    <!-- One seamless card for both the close button and the document — no separate header strip
-         with its own background/edge, so there's no visible seam between the two. -->
     <Border Margin="16" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6">
         <DockPanel>
             <Button DockPanel.Dock="Top" Style="{StaticResource WindowCloseButtonStyle}" Content="&#xE8BB;"
                     HorizontalAlignment="Right" Click="OnCloseClicked" ToolTip="Close"/>
+
+            <CheckBox DockPanel.Dock="Bottom" x:Name="IgnoreUpdatesCheck"
+                      Content="Ignore updates for this addon"
+                      Margin="16,0,16,16"
+                      ToolTip="Even if a newer remote version is found, this addon won't be flagged as updatable."/>
+
             <markdig:MarkdownViewer x:Name="Viewer" Style="{StaticResource ExpandedMarkdownViewer}"
                                      Margin="16,0,16,16"/>
         </DockPanel>

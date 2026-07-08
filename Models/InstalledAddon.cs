@@ -38,6 +38,9 @@ public sealed class InstalledAddon
 
     public DateTime InstalledUtc { get; set; }
 
+    /// <summary>User opt-out, set from the Details dialog: never flag this addon as updatable, even if a newer remote version is found.</summary>
+    public bool IgnoreUpdates { get; set; }
+
     /// <summary>Set by <c>AddonLibrary.CheckForUpdatesAsync</c>; never persisted or true for Manual addons.</summary>
     [JsonIgnore]
     public bool HasUpdateAvailable { get; set; }

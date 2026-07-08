@@ -70,7 +70,10 @@ updates, and picks up any folder you dropped into `Interface\AddOns` by hand, pr
 adopting anything that might conflict with what's already tracked. The search box filters the list
 live by name as your addon count grows, and each row's info button shows that addon's own
 README — from its GitHub repo, a local README file, or its `.toc` as a last resort — without
-leaving the app.
+leaving the app. If several addons have updates queued up, **Update All** installs every one of
+them in a single click instead of working through the list one row at a time; and if you'd rather
+an addon stayed on its current version even when a newer one is published, its Details dialog has
+an "Ignore updates" checkbox that permanently stops it from being flagged.
 
 ### Settings
 
@@ -115,7 +118,7 @@ own code.
 
 ## Project status
 
-Version 1.8.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
+Version 1.9.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
 ## License

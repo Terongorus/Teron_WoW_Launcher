@@ -240,7 +240,7 @@ public sealed class AddonLibrary
     {
         foreach (InstalledAddon addon in _addons)
         {
-            if (addon.SourceKind == AddonSourceKind.Manual || string.IsNullOrWhiteSpace(addon.SourceRef))
+            if (addon.IgnoreUpdates || addon.SourceKind == AddonSourceKind.Manual || string.IsNullOrWhiteSpace(addon.SourceRef))
             {
                 addon.HasUpdateAvailable = false;
                 continue;

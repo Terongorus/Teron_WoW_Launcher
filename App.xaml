@@ -55,6 +55,70 @@
         </Style>
 
         <!--
+          Shared page-card look for a tab's content: a fixed-width, horizontally centered dark card, so
+          content reads as one consistent column instead of stretching edge-to-edge when the window is
+          maximized. Tweaks and Settings apply this directly to their one root Border; MPQ Patches and
+          Addons use the split PageCardTopStyle/PageCardBottomStyle pair below instead (they need a
+          pinned header above a separately-scrollable list). DLLs isn't part of this family — it's a
+          genuinely wide side-by-side browse layout, not a narrow form, so it intentionally stays
+          full-width.
+
+          HorizontalAlignment is Stretch, not Center: Stretch makes the Border fill the width its
+          parent offers, and MaxWidth then clips that down to the cap — at which point WPF centers the
+          clipped element automatically. Center alone would size the Border to its own content's
+          natural width instead, so it would never reach the cap and every tab's card would end up a
+          different width depending on what that tab happens to contain.
+        -->
+        <Style x:Key="PageCardStyle" TargetType="{x:Type Border}">
+            <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="Margin" Value="24"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="Background" Value="#101014"/>
+            <Setter Property="BorderBrush" Value="#3A3A42"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="24"/>
+        </Style>
+
+        <!--
+          Split card for tabs that need a pinned header above a scrollable list (MPQ Patches, Addons):
+          two Borders stacked in a plain Auto/Star Grid — Top holds the header/buttons and is never
+          inside a ScrollViewer, so it can't move; Bottom sits inside a ScrollViewer whose OWN scrollbar
+          is hidden (see the tab XAML: MainWindow drives scrolling through a separate, standalone
+          ScrollBar in a dedicated Grid column instead). Both Borders are Auto-height and top-aligned,
+          so a short list produces a short card (no forced fill-to-bottom dead space); a long list grows
+          past the Star row's available height and that standalone ScrollBar starts scrolling just the
+          list while the header stays put. Rounded/bordered only on the edges that don't touch, so the
+          pair reads as one seamless card.
+
+          Both styles use the same symmetric Margin — width/centering no longer needs to account for a
+          scrollbar at all here, because MainWindow.xaml keeps the scrollbar out of both Borders' own
+          width calculation entirely (it lives in a sibling Grid column, sized via SharedSizeGroup so it
+          can never drift between Top and Bottom regardless of how wide the real scrollbar renders).
+        -->
+        <Style x:Key="PageCardTopStyle" TargetType="{x:Type Border}">
+            <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="Margin" Value="24,24,24,0"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="Background" Value="#101014"/>
+            <Setter Property="BorderBrush" Value="#3A3A42"/>
+            <Setter Property="BorderThickness" Value="1,1,1,0"/>
+            <Setter Property="CornerRadius" Value="6,6,0,0"/>
+            <Setter Property="Padding" Value="24,24,24,16"/>
+        </Style>
+        <Style x:Key="PageCardBottomStyle" TargetType="{x:Type Border}">
+            <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="Margin" Value="24,0,24,24"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
+            <Setter Property="Background" Value="#101014"/>
+            <Setter Property="BorderBrush" Value="#3A3A42"/>
+            <Setter Property="BorderThickness" Value="1,0,1,1"/>
+            <Setter Property="CornerRadius" Value="0,0,6,6"/>
+            <Setter Property="Padding" Value="24,16,24,24"/>
+        </Style>
+
+        <!--
           Markdig.Wpf renders headings with a hardcoded black Foreground and gives code spans a light
           gray background — both invisible/unreadable against this app's dark theme. These override the
           library's own named style-resource keys (its built-in theming extension point, defined in its
@@ -122,6 +186,25 @@
             <Setter Property="BorderBrush" Value="#4A4A54"/>
             <Setter Property="BorderThickness" Value="1,1,0,0"/>
             <Setter Property="Padding" Value="6,4"/>
+        </Style>
+
+        <!--
+          MarkdownViewer's default template (used everywhere else via CompactMarkdownViewer/plain
+          usage) shows a built-in zoom/print toolbar (IsToolBarVisible defaults to true) — an OS-
+          styled strip that clashes with this app's chrome and makes no sense floating over a
+          full-size document. This is otherwise the library's stock FlowDocumentScrollViewer
+          presentation (real scrollbars, unlike CompactMarkdownViewer's hidden ones), so its internal
+          ScrollViewer/ScrollBar still pick up the app-wide modern scrollbar style automatically.
+          App-wide (not per-dialog) since both MarkdownPreviewDialog and AddonDetailsDialog use it.
+        -->
+        <Style x:Key="ExpandedMarkdownViewer" TargetType="{x:Type markdig:MarkdownViewer}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type markdig:MarkdownViewer}">
+                        <FlowDocumentScrollViewer Document="{TemplateBinding Document}" IsToolBarVisible="False"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <!--

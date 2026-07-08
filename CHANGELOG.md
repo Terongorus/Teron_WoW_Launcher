@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [1.9.0] - 2026-07-08
+
+### Added
+
+- "Update All" button on the Addons tab, next to Add/Refresh, updating every addon currently flagged as having an available update in one go — reuses the same per-row update path, so individual "Update" buttons behave exactly as before. It's disabled (no blue accent) unless at least one addon actually has an update available.
+- "Ignore updates for this addon" checkbox in the Addon Details dialog. Once checked, that addon is permanently excluded from the "update available" flag, even if a newer version shows up on GitHub — for addons you deliberately want to keep pinned to their current version.
+- The MPQ Patches and Addons tabs now use the same centered, fixed-width card layout as Tweaks and Settings, so their content no longer stretches uncomfortably far apart when the launcher window is maximized. Each tab's header and toolbar row stay pinned in place while only the list below scrolls, through a dedicated scrollbar that shares its column width with the header so the two halves can't drift out of alignment as the window is resized.
+
+### Fixed
+
+- Mouse-wheel scrolling didn't work while hovering directly over an addon row on the Addons tab — the list's own internal (deliberately disabled) scrollbar was silently intercepting the scroll input before it could reach the tab's real scrollbar.
+
 ## [1.8.0] - 2026-07-08
 
 ### Added
