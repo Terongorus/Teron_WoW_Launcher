@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TeronWoWLauncher.Models;
@@ -269,7 +271,7 @@ public sealed class AddonLibrary
             string dir = Path.Combine(addonsDir, folder);
             if (Directory.Exists(dir))
             {
-                try { Directory.Delete(dir, recursive: true); }
+                try { DirectoryHelper.DeleteRecursive(dir); }
                 catch (Exception ex) { _log.Warn($"Could not delete {dir}: {ex.Message}"); }
             }
         }
@@ -277,5 +279,158 @@ public sealed class AddonLibrary
         _addons.Remove(addon);
         Save();
         _log.Info($"Removed addon '{WowColorTextParser.StripCodes(addon.Name)}'.");
+    }
+
+    /// <summary>
+    /// Best-effort "what is this addon" text for the Details button, in priority order: the GitHub
+    /// repo's own README (for addons tracked from GitHub), else a local README file sitting in the
+    /// addon's own folder, else whatever the .toc file itself carries (title/notes/author/etc.) —
+    /// the last resort for out-of-support, never-GitHub-tracked, or locally-developed addons.
+    /// </summary>
+    public async Task<string> GetDetailsMarkdownAsync(InstalledAddon addon, string wowDir, CancellationToken ct)
+    {
+        if (addon.SourceKind == AddonSourceKind.GitHub && TryParseGitHubRepo(addon.SourceRef, out string owner, out string repo))
+        {
+            string? readme = await TryFetchGitHubReadmeAsync(owner, repo, ct);
+            if (readme is not null)
+            {
+                return readme;
+            }
+        }
+
+        string addonsDir = AddonPaths.AddOnsDir(wowDir);
+        foreach (string folder in addon.Folders)
+        {
+            string? localReadme = TryReadLocalReadme(Path.Combine(addonsDir, folder));
+            if (localReadme is not null)
+            {
+                return localReadme;
+            }
+        }
+
+        return BuildTocFallbackMarkdown(addon, addonsDir);
+    }
+
+    private static bool TryParseGitHubRepo(string? sourceRef, out string owner, out string repo)
+    {
+        owner = string.Empty;
+        repo = string.Empty;
+        if (string.IsNullOrWhiteSpace(sourceRef))
+        {
+            return false;
+        }
+
+        Match m = Regex.Match(sourceRef, @"github\.com/(?<owner>[^/\s]+)/(?<repo>[^/\s#?]+)", RegexOptions.IgnoreCase);
+        if (!m.Success)
+        {
+            return false;
+        }
+
+        owner = m.Groups["owner"].Value;
+        repo = m.Groups["repo"].Value;
+        return true;
+    }
+
+    // GitHub's "get README" endpoint auto-detects the actual filename/casing (README.md, Readme.txt,
+    // etc.), so there's no need to guess — it returns base64-encoded content regardless of format.
+    private async Task<string?> TryFetchGitHubReadmeAsync(string owner, string repo, CancellationToken ct)
+    {
+        try
+        {
+            using HttpResponseMessage resp = await Http.GetAsync($"https://api.github.com/repos/{owner}/{repo}/readme", ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            using JsonDocument doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            if (!doc.RootElement.TryGetProperty("content", out JsonElement contentEl))
+            {
+                return null;
+            }
+
+            string base64 = (contentEl.GetString() ?? string.Empty).Replace("\n", string.Empty);
+            return Encoding.UTF8.GetString(Convert.FromBase64String(base64));
+        }
+        catch (Exception ex)
+        {
+            _log.Debug($"GitHub README fetch failed for {owner}/{repo}: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static string? TryReadLocalReadme(string folderDir)
+    {
+        if (!Directory.Exists(folderDir))
+        {
+            return null;
+        }
+
+        // Prefer a .md file if the folder happens to have more than one README-ish file.
+        string? path = Directory.EnumerateFiles(folderDir, "README*", SearchOption.TopDirectoryOnly)
+            .OrderByDescending(f => f.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+            .FirstOrDefault();
+
+        if (path is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return File.ReadAllText(path);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string BuildTocFallbackMarkdown(InstalledAddon addon, string addonsDir)
+    {
+        var sections = new List<string>();
+        foreach (string folder in addon.Folders)
+        {
+            string dir = Path.Combine(addonsDir, folder);
+            string? tocPath = Directory.Exists(dir) ? Directory.GetFiles(dir, "*.toc").FirstOrDefault() : null;
+            if (tocPath is null)
+            {
+                continue;
+            }
+
+            var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string raw in File.ReadLines(tocPath))
+            {
+                string line = raw.Trim();
+                if (!line.StartsWith("##", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                int colon = line.IndexOf(':');
+                if (colon < 2)
+                {
+                    continue;
+                }
+
+                string key = line[2..colon].Trim();
+                string value = WowColorTextParser.StripCodes(line[(colon + 1)..].Trim());
+                if (key.Length > 0 && value.Length > 0)
+                {
+                    fields[key] = value;
+                }
+            }
+
+            if (fields.Count == 0)
+            {
+                continue;
+            }
+
+            sections.Add($"## {folder}\n\n" + string.Join('\n', fields.Select(f => $"**{f.Key}:** {f.Value}  ")));
+        }
+
+        return sections.Count > 0
+            ? string.Join("\n\n", sections)
+            : "No details available — this addon has no GitHub source, no README file, and its .toc carries no extra information.";
     }
 }

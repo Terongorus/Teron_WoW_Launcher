@@ -369,35 +369,67 @@
             <TextBlock Style="{StaticResource MicroText}" Text="Add by GitHub repo URL, a direct archive URL, or a local .zip/.rar/.7z file."/>
           </StackPanel>
 
-          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnOpenAddAddonDialog"
-                    ToolTip="Add an addon"/>
-            <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshAddons" Margin="8,0,0,0"
-                    ToolTip="Refresh: reload, adopt local addons, and check for updates"/>
-            <TextBlock x:Name="AddonStatusText" Style="{StaticResource CaptionText}" VerticalAlignment="Center" Margin="12,0,0,0"/>
-          </StackPanel>
+          <Grid Grid.Row="1" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal">
+              <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnOpenAddAddonDialog"
+                      ToolTip="Add an addon"/>
+              <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshAddons" Margin="8,0,0,0"
+                      ToolTip="Refresh: reload, adopt local addons, and check for updates"/>
+              <TextBlock x:Name="AddonStatusText" Style="{StaticResource CaptionText}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+            </StackPanel>
+            <Grid Grid.Column="1" Width="260" VerticalAlignment="Center">
+              <TextBox x:Name="AddonSearchBox" Padding="5,4,24,4" TextChanged="OnAddonSearchTextChanged"
+                       PreviewKeyDown="OnAddonSearchKeyDown" GotFocus="OnAddonSearchFocusChanged"
+                       LostFocus="OnAddonSearchFocusChanged" ToolTip="Search addons by name"/>
+              <TextBlock x:Name="AddonSearchPlaceholder" Style="{StaticResource MicroText}"
+                         Text="Search Addons" IsHitTestVisible="False" VerticalAlignment="Center" Margin="5,0,0,0"/>
+              <Button Content="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="10" Foreground="#E5484D"
+                      Background="Transparent" BorderThickness="0" Padding="0" Cursor="Arrow"
+                      Width="18" Height="18" HorizontalAlignment="Right" VerticalAlignment="Center"
+                      Margin="0,0,3,0" Click="OnClearAddonSearch" ToolTip="Clear search">
+                <Button.Style>
+                  <Style TargetType="{x:Type Button}" BasedOn="{StaticResource {x:Type Button}}">
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding ElementName=AddonSearchBox, Path=Text.Length}" Value="0">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Button.Style>
+              </Button>
+            </Grid>
+          </Grid>
 
           <ListBox Grid.Row="2" x:Name="AddonList" HorizontalContentAlignment="Stretch">
             <ListBox.ItemTemplate>
               <DataTemplate>
                 <Grid Margin="0,4">
                   <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                   </Grid.ColumnDefinitions>
 
-                  <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                  <Button Grid.Column="0" Style="{StaticResource GhostIconButtonStyle}" Content="&#xE946;"
+                          Tag="{Binding}" Click="OnAddonDetailsClick" ToolTip="View details"
+                          Margin="0,0,8,0"/>
+
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Style="{StaticResource BodyText}" svc:WowColoredText.Text="{Binding Name}" VerticalAlignment="Center"/>
                     <TextBlock Text="{Binding VersionDisplay}" Style="{StaticResource CaptionText}"
                                Margin="8,0,0,0" VerticalAlignment="Center"/>
                   </StackPanel>
 
-                  <Button Grid.Column="1" Style="{StaticResource IconButtonStyle}" Content="&#xE896;"
+                  <Button Grid.Column="2" Style="{StaticResource IconButtonStyle}" Content="&#xE896;"
                           Tag="{Binding}" Click="OnUpdateAddonClick" ToolTip="Update this addon"
                           Visibility="{Binding HasUpdateAvailable, Converter={StaticResource BoolToVis}}"
                           Margin="8,0,0,0" Width="28" Height="28" Background="#2E6DA4"/>
-                  <Button Grid.Column="2" Style="{StaticResource IconButtonStyle}" Content="&#xE74D;"
+                  <Button Grid.Column="3" Style="{StaticResource IconButtonStyle}" Content="&#xE74D;"
                           Tag="{Binding}" Click="OnRemoveAddonClick" ToolTip="Remove this addon"
                           Margin="8,0,0,0" Width="28" Height="28"/>
                 </Grid>
