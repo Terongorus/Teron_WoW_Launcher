@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -766,7 +767,56 @@ public partial class MainWindow : Window
     {
         _addons.Load();
         AddonList.ItemsSource = _addonItems;
+        CollectionViewSource.GetDefaultView(_addonItems).Filter = FilterAddonRow;
         RefreshAddonList();
+        UpdateAddonSearchPlaceholder();
+    }
+
+    private bool FilterAddonRow(object item)
+    {
+        string query = AddonSearchBox.Text.Trim();
+        if (query.Length == 0)
+        {
+            return true;
+        }
+
+        var addon = (InstalledAddon)item;
+        return WowColorTextParser.StripCodes(addon.Name).Contains(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void OnAddonSearchTextChanged(object sender, TextChangedEventArgs e)
+    {
+        CollectionViewSource.GetDefaultView(_addonItems).Refresh();
+        UpdateAddonSearchPlaceholder();
+    }
+
+    private void OnAddonSearchFocusChanged(object sender, RoutedEventArgs e) => UpdateAddonSearchPlaceholder();
+
+    // Driven explicitly from TextChanged/GotFocus/LostFocus instead of an XAML trigger bound to
+    // IsFocused: IsFocused reflects logical focus (FocusManager), not keyboard focus, and
+    // Keyboard.ClearFocus() (used below for Escape) only clears the latter — a trigger watching
+    // IsFocused could end up never seeing it flip back to false. Setting Visibility directly here
+    // has no such ambiguity.
+    private void UpdateAddonSearchPlaceholder()
+        => AddonSearchPlaceholder.Visibility = AddonSearchBox.Text.Length == 0 && !AddonSearchBox.IsFocused
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    private void OnAddonSearchKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            Keyboard.ClearFocus();
+            FocusManager.SetFocusedElement(FocusManager.GetFocusScope(AddonSearchBox), null);
+            UpdateAddonSearchPlaceholder();
+            e.Handled = true;
+        }
+    }
+
+    private void OnClearAddonSearch(object sender, RoutedEventArgs e)
+    {
+        AddonSearchBox.Text = string.Empty;
+        AddonSearchBox.Focus();
     }
 
     private void RefreshAddonList()
@@ -820,6 +870,26 @@ public partial class MainWindow : Window
             _addons.Remove(addon, CurrentWowDir());
             RefreshAddonList();
             AddonStatusText.Text = $"Removed {WowColorTextParser.StripCodes(addon.Name)}.";
+        }
+    }
+
+    private async void OnAddonDetailsClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: InstalledAddon addon })
+        {
+            return;
+        }
+
+        string title = WowColorTextParser.StripCodes(addon.Name);
+        UpdateStatus($"Loading details for '{title}'...");
+        try
+        {
+            string markdown = await _addons.GetDetailsMarkdownAsync(addon, CurrentWowDir(), CancellationToken.None);
+            ShowModal(new MarkdownPreviewDialog(title, markdown));
+        }
+        finally
+        {
+            UpdateStatus("Ready.");
         }
     }
 

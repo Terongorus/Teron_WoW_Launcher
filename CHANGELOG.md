@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [1.8.0] - 2026-07-08
+
+### Added
+
+- "Details" button (info icon, no background) on the left of each Addons list row. Shows the addon's own README when it was installed from GitHub, falling back to a local README file in its own folder if it wasn't, and finally to whatever the addon's `.toc` itself carries (title/notes/author/etc.) if neither README exists — for out-of-support, never-tracked, or locally-developed addons.
+
+## [1.7.1] - 2026-07-08
+
+### Fixed
+
+- Addons search box: the "Search Addons" placeholder didn't reappear after clearing the search text (via backspace or the clear button) — it now tracks focus/text state directly instead of through an XAML trigger that could miss the update.
+
+## [1.7.0] - 2026-07-08
+
+### Added
+
+- Search box on the Addons tab, right-aligned on the same row as Add/Refresh, filtering the addon list live by name as you type. Includes a "Search Addons" placeholder shown only while empty and unfocused, a clear ("×") button that appears once there's text to clear, and pressing Escape while focused clears focus without touching the typed text.
+
+## [1.6.2] - 2026-07-08
+
+### Fixed
+
+- Removing or reinstalling an addon whose folder contained a real `.git` checkout (adopted from a manual local install) could fail silently — git marks its own pack files read-only, which a plain recursive delete can't remove. Read-only attributes are now cleared before deleting.
+- Installing a GitHub-sourced addon whose default branch isn't literally named "master" could 404 once GitHub's unauthenticated API rate limit (60/hour) was used up earlier in the same session, since the branch lookup would silently fall back to a hardcoded guess. It now retries with the other common branch name ("main"/"master") before giving up, and logs rate-limiting clearly instead of burying it.
+- Addons could keep showing "update available" even right after updating them, when a version-check signature was missing its confirmed commit sha (same rate-limiting cause as above) and got compared against a previously-stored full signature. An unconfirmed signature is no longer compared at all — that check cycle is just skipped instead of producing a false positive.
+
 ## [1.6.1] - 2026-07-07
 
 ### Added

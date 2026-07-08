@@ -67,7 +67,10 @@ URL, or point at a `.zip`/`.rar`/`.7z` you already downloaded. Addon names rende
 in-game color codes, and versions come straight from each addon's own `.toc` file rather than a
 GitHub release tag. Hitting **Refresh** does everything at once — checks every tracked addon for
 updates, and picks up any folder you dropped into `Interface\AddOns` by hand, prompting you before
-adopting anything that might conflict with what's already tracked.
+adopting anything that might conflict with what's already tracked. The search box filters the list
+live by name as your addon count grows, and each row's info button shows that addon's own
+README — from its GitHub repo, a local README file, or its `.toc` as a last resort — without
+leaving the app.
 
 ### Settings
 
@@ -112,7 +115,7 @@ own code.
 
 ## Project status
 
-Version 1.6.1. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
+Version 1.8.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
 ## License

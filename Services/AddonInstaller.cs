@@ -43,7 +43,7 @@ public sealed class AddonInstaller
                 string dest = Path.Combine(addonsDir, name);
                 if (Directory.Exists(dest))
                 {
-                    Directory.Delete(dest, recursive: true);
+                    DirectoryHelper.DeleteRecursive(dest);
                 }
 
                 CopyDirectory(dir, dest);
