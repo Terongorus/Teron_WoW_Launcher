@@ -21,17 +21,23 @@ namespace TeronWoWLauncher.Services;
 /// the same regardless of what keyboard layout is active. Tab/Enter are still sent as real
 /// virtual-key presses since those are control keys, not characters — layout never affects them.
 ///
-/// "Loading finished" is detected by polling the process's disk I/O counters: asset loading is
-/// I/O-heavy, an idle login screen is not, so a stretch of near-zero read/write activity is a
-/// reasonable, version-agnostic signal that the client is ready — instead of guessing a fixed
-/// delay that's wrong for any disk speed other than the one it was tuned on. The configured delay
-/// is kept only as a fallback for the rare case the I/O counters can't be read.
+/// "Loading finished" is detected by polling the game window's responsiveness to a trivial message
+/// (WM_NULL via SendMessageTimeout): asset loading keeps the client's main thread — and so its
+/// message pump — busy enough to fall behind, an idle login screen answers promptly, so a stretch of
+/// consecutive quick responses is a reasonable, version-agnostic signal that the client is ready —
+/// instead of guessing a fixed delay that's wrong for any machine other than the one it was tuned on.
+/// This used to poll the process's disk I/O counters instead (GetProcessIoCounters via OpenProcess),
+/// but that needs a process handle, which can be — and on at least one real machine, was — denied
+/// (Win32 error 5) for a process still settling right after CreateSuspended+inject+Resume. A window
+/// handle needs no such permission at all, so the window-based check can't hit that wall. The
+/// user-configured delay remains a pure fallback, applied only if the window never settles before the
+/// overall timeout — not on every successful detection, so it stays a genuine last resort rather than
+/// adding wait time to every login.
 /// </summary>
 public sealed class AutoLoginService
 {
     private const int PollIntervalMs = 200;
     private const int RequiredQuietSamples = 4;
-    private const ulong QuietThresholdBytes = 64 * 1024;
 
     private readonly Logger _log = Logger.Instance;
 
@@ -65,20 +71,35 @@ public sealed class AutoLoginService
 
             _log.Info("Auto-login: waiting for the client to finish loading...");
             int remainingMs = (int)Math.Max(0, deadline - Environment.TickCount64);
-            if (!WaitForLoadingToSettle(gameProcessId, hwnd, remainingMs, ct))
+            if (!WaitForLoadingToSettle(hwnd, remainingMs, ct))
             {
-                _log.Warn("Auto-login: could not measure load activity; falling back to the configured delay.");
+                _log.Warn("Auto-login: the game window never settled before the timeout; falling back to the configured delay.");
                 Thread.Sleep(Math.Max(0, delayMs));
             }
             ct.ThrowIfCancellationRequested();
 
             hwnd = FindVisibleWindowForProcess(gameProcessId) is var found && found != IntPtr.Zero ? found : hwnd;
-            if (!User32.SetForegroundWindow(hwnd))
+
+            // SendInput has no concept of a target window — it goes wherever the OS currently has
+            // focus. SetForegroundWindow can be silently refused (Windows' foreground-lock heuristic
+            // denies a foreground-steal request depending on what last had input focus), so merely
+            // requesting focus and proceeding regardless would risk typing the plaintext account/
+            // password into whatever window the user was actually looking at. A few short retries
+            // absorb normal focus-timing flakiness; if focus still can't be confirmed, abort instead
+            // of guessing.
+            bool focused = false;
+            for (int attempt = 0; attempt < 5 && !focused; attempt++)
             {
-                _log.Warn("Auto-login: could not bring the game to the foreground; keystrokes may miss.");
+                User32.SetForegroundWindow(hwnd);
+                Thread.Sleep(150);
+                focused = User32.GetForegroundWindow() == hwnd;
             }
 
-            Thread.Sleep(150);
+            if (!focused)
+            {
+                _log.Warn("Auto-login: could not confirm the game window has focus; aborting rather than risk typing credentials into the wrong window.");
+                return;
+            }
 
             _log.Info("Auto-login: sending credentials.");
             SendString(account);
@@ -93,87 +114,46 @@ public sealed class AutoLoginService
     }
 
     /// <summary>
-    /// Polls the process's disk I/O counters and the game window's foreground state until read/write
-    /// activity has stayed quiet for <see cref="RequiredQuietSamples"/> consecutive samples (a proxy
-    /// for "done loading assets"), re-asserting foreground focus on every sample so a loading screen
-    /// can't steal it away. Returns false if the counters can't be read at all, so the caller can fall
-    /// back to a fixed delay instead of proceeding with no wait whatsoever.
+    /// Polls the game window's responsiveness to a trivial WM_NULL message until it's stayed
+    /// responsive for <see cref="RequiredQuietSamples"/> consecutive samples (a proxy for "done
+    /// loading assets"), re-asserting foreground focus on every sample so a loading screen can't
+    /// steal it away. Needs only the window handle already in hand — no process-level access right
+    /// at all, unlike the GetProcessIoCounters/OpenProcess approach this replaced, which could be (and
+    /// on at least one real machine, was) denied outright for a process still settling right after
+    /// CreateSuspended+inject+Resume. Returns false only if the window never settles before the
+    /// deadline — the caller's genuine last-resort fallback, not a routine occurrence now that
+    /// measuring at all can't be denied the way opening a process handle could.
     /// </summary>
-    private bool WaitForLoadingToSettle(int pid, IntPtr hwnd, int timeoutMs, CancellationToken ct)
+    private bool WaitForLoadingToSettle(IntPtr hwnd, int timeoutMs, CancellationToken ct)
     {
-        // Opened with the minimal right GetProcessIoCounters actually needs, rather than going
-        // through System.Diagnostics.Process.Handle (which requests full PROCESS_ALL_ACCESS and can
-        // be denied even for a process we just created ourselves).
-        IntPtr hProcess = Kernel32.OpenProcess(Kernel32.PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
-        if (hProcess == IntPtr.Zero)
+        long deadline = Environment.TickCount64 + timeoutMs;
+        int quietSamples = 0;
+
+        while (Environment.TickCount64 < deadline)
         {
-            _log.Warn($"Auto-login: could not open the game process for load monitoring (Win32 error {Marshal.GetLastWin32Error()}).");
-            return false;
-        }
+            ct.ThrowIfCancellationRequested();
+            Thread.Sleep(PollIntervalMs);
 
-        try
-        {
-            if (!TryGetIoCounters(hProcess, out ulong lastRead, out ulong lastWrite))
+            User32.SetForegroundWindow(hwnd);
+
+            bool responsive = User32.SendMessageTimeout(
+                hwnd, User32.WM_NULL, IntPtr.Zero, IntPtr.Zero,
+                User32.SMTO_ABORTIFHUNG | User32.SMTO_BLOCK, PollIntervalMs, out _) != IntPtr.Zero;
+
+            if (responsive)
             {
-                _log.Warn($"Auto-login: could not read the game process's I/O counters (Win32 error {Marshal.GetLastWin32Error()}).");
-                return false;
-            }
-
-            long deadline = Environment.TickCount64 + timeoutMs;
-            int quietSamples = 0;
-
-            while (Environment.TickCount64 < deadline)
-            {
-                ct.ThrowIfCancellationRequested();
-                Thread.Sleep(PollIntervalMs);
-
-                User32.SetForegroundWindow(hwnd);
-
-                if (!TryGetIoCounters(hProcess, out ulong read, out ulong write))
+                quietSamples++;
+                if (quietSamples >= RequiredQuietSamples)
                 {
-                    _log.Warn($"Auto-login: could not read the game process's I/O counters (Win32 error {Marshal.GetLastWin32Error()}).");
-                    return false;
-                }
-
-                ulong deltaRead = read - lastRead;
-                ulong deltaWrite = write - lastWrite;
-                lastRead = read;
-                lastWrite = write;
-
-                if (deltaRead < QuietThresholdBytes && deltaWrite < QuietThresholdBytes)
-                {
-                    quietSamples++;
-                    if (quietSamples >= RequiredQuietSamples)
-                    {
-                        return true;
-                    }
-                }
-                else
-                {
-                    quietSamples = 0;
+                    return true;
                 }
             }
-        }
-        finally
-        {
-            Kernel32.CloseHandle(hProcess);
-        }
-
-        _log.Warn("Auto-login: load activity never went quiet before the timeout; proceeding anyway.");
-        return true;
-    }
-
-    private static bool TryGetIoCounters(IntPtr hProcess, out ulong read, out ulong write)
-    {
-        if (Kernel32.GetProcessIoCounters(hProcess, out Kernel32.IO_COUNTERS counters))
-        {
-            read = counters.ReadTransferCount;
-            write = counters.WriteTransferCount;
-            return true;
+            else
+            {
+                quietSamples = 0;
+            }
         }
 
-        read = 0;
-        write = 0;
         return false;
     }
 

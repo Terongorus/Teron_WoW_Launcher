@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using TeronWoWLauncher.Models;
 
 namespace TeronWoWLauncher.Services;
@@ -29,6 +30,19 @@ public sealed class PatchService
     public string WowExePath(string wowDir) => Path.Combine(wowDir, WowExeFileName);
     public string BackupPath(string wowDir) => Path.Combine(wowDir, BackupFileName);
     public bool BackupExists(string wowDir) => File.Exists(BackupPath(wowDir));
+
+    /// <summary>SHA-256 of the current WoW.exe.backup, or null if there isn't one.</summary>
+    public string? ComputeBackupHash(string wowDir)
+    {
+        string backup = BackupPath(wowDir);
+        if (!File.Exists(backup))
+        {
+            return null;
+        }
+
+        using FileStream fs = File.OpenRead(backup);
+        return Convert.ToHexString(SHA256.HashData(fs));
+    }
 
     /// <summary>
     /// Ensure a pristine backup exists. If none does, the current WoW.exe is accepted as the pristine
@@ -62,7 +76,16 @@ public sealed class PatchService
             return false;
         }
 
-        File.Copy(exe, backup);
+        try
+        {
+            AtomicWrite(backup, image);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _log.Error($"Could not create pristine backup: {ex.Message}");
+            return false;
+        }
+
         _log.Info($"Created pristine backup: {BackupFileName} ({image.Length:N0} bytes).");
         return true;
     }
@@ -101,29 +124,9 @@ public sealed class PatchService
             ApplyPatch(image, patch, value);
         }
 
-        // Only touch disk once the whole image patched successfully. Write to a uniquely-named temp
-        // file first (avoids collisions with any other overlapping rebuild), then swap it in.
-        string temp = Path.Combine(wowDir, $"{WowExeFileName}.{Guid.NewGuid():N}.tmp");
-        try
-        {
-            File.WriteAllBytes(temp, image);
-
-            try
-            {
-                File.Copy(temp, exe, overwrite: true);
-            }
-            catch (IOException ex)
-            {
-                throw new IOException(
-                    $"Could not write {WowExeFileName} — it's currently in use, most likely because " +
-                    "the game is running. Close it and try again.", ex);
-            }
-        }
-        finally
-        {
-            try { File.Delete(temp); } catch { /* best-effort cleanup */ }
-        }
-
+        // Only touch the real path once the whole image is patched successfully, and only via an
+        // atomic rename (see AtomicWrite) — never a direct overwrite.
+        AtomicWrite(exe, image);
         _log.Info($"{WowExeFileName} rebuilt successfully.");
     }
 
@@ -136,8 +139,29 @@ public sealed class PatchService
             throw new InvalidOperationException($"No {BackupFileName} to restore from.");
         }
 
-        File.Copy(backup, WowExePath(wowDir), overwrite: true);
+        AtomicWrite(WowExePath(wowDir), File.ReadAllBytes(backup));
         _log.Info($"Restored pristine {WowExeFileName} from backup.");
+    }
+
+    /// <summary>
+    /// Thin wrapper over <see cref="AtomicFile.WriteAllBytes"/> that upgrades its generic "in use by
+    /// another process" message to the specific, actionable one for this context — for WoW.exe that
+    /// almost always means the game itself is running. AtomicFile's own UnauthorizedAccessException
+    /// wording (permissions/elevation/antivirus) already applies just as well here, so it passes
+    /// through unchanged.
+    /// </summary>
+    private static void AtomicWrite(string dest, byte[] content)
+    {
+        try
+        {
+            AtomicFile.WriteAllBytes(dest, content);
+        }
+        catch (IOException ex)
+        {
+            throw new IOException(
+                $"Could not write '{Path.GetFileName(dest)}' — it's currently in use, most likely " +
+                "because the game is running. Close it and try again.", ex);
+        }
     }
 
     /// <summary>Remove any leftover *.tmp rebuild artifacts from a previous crashed/killed run.</summary>

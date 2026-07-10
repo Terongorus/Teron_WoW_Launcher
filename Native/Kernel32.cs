@@ -135,26 +135,4 @@ internal static class Kernel32
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern bool Process32Next(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
-
-    // --- Process I/O counters: used by auto-login to detect when the client has finished loading
-    // (asset loading is disk-I/O-heavy; an idle login screen is not), instead of a fixed delay. ---
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct IO_COUNTERS
-    {
-        public ulong ReadOperationCount;
-        public ulong WriteOperationCount;
-        public ulong OtherOperationCount;
-        public ulong ReadTransferCount;
-        public ulong WriteTransferCount;
-        public ulong OtherTransferCount;
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    public static extern bool GetProcessIoCounters(IntPtr hProcess, out IO_COUNTERS lpIoCounters);
-
-    public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    public static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
 }

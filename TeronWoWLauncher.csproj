@@ -22,8 +22,8 @@
     <Product>Teron WoW Launcher (TWL)</Product>
     <Company>Teronverse</Company>
     <Authors>Kaloyan Kolev</Authors>
-    <Version>1.8.0</Version>
-    <!-- Keep AssemblyInformationalVersion clean ("1.8.0", not "1.8.0+<gitsha>"). -->
+    <Version>1.10.0</Version>
+    <!-- Keep AssemblyInformationalVersion clean ("1.10.0", not "1.10.0+<gitsha>"). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 
     <!-- Shown in Explorer/taskbar/Alt+Tab (and used as MainWindow's own icon below, since the
@@ -47,6 +47,12 @@
   <ItemGroup>
     <!-- Extracts .rar/.7z addon archives (the BCL only handles .zip). Pure-managed, MIT. -->
     <PackageReference Include="SharpCompress" Version="0.49.1" />
+    <!-- Real git clone/fetch for GitHub-tracked addons (see GitHubAddonSource) — avoids the
+         api.github.com REST rate limit (60/hr) entirely, since git's smart-HTTP protocol isn't
+         subject to it. Verified its native git2-*.dll loads correctly under this project's
+         self-contained single-file win-x86 publish (bundled the same way WPF's own native
+         dependencies already are). MIT. -->
+    <PackageReference Include="LibGit2Sharp" Version="0.30.0" />
     <!-- Renders README.md/CHANGELOG.md as a WPF FlowDocument on the Home tab. MIT. -->
     <PackageReference Include="Markdig.Wpf" Version="0.5.0.1" />
   </ItemGroup>
@@ -55,6 +61,12 @@
     <!-- Embedded as a WPF pack resource so MainWindow's Icon="game.ico" resolves at runtime,
          independent of ApplicationIcon above (which only covers the compiled exe's own Win32 icon). -->
     <Resource Include="game.ico" />
+    <!-- Body background art (MainWindow's BodyBackgroundImage) — one is picked at random per launch.
+         Pre-cropped to a consistent 16:9 and downscaled/recompressed from the original multi-MB source
+         paintings, so all of them together add a few MB instead of tens of MB. Keep
+         MainWindow.xaml.cs's BodyBackgroundImageCount in sync with how many background_N.jpg files
+         exist here. -->
+    <Resource Include="Artwork\background_*.jpg" />
   </ItemGroup>
 
   <!--

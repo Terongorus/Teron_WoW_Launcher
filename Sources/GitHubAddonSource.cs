@@ -3,19 +3,28 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using LibGit2Sharp;
 using TeronWoWLauncher.Models;
 using TeronWoWLauncher.Services;
 
 namespace TeronWoWLauncher.Sources;
 
 /// <summary>
-/// Installs an addon from a GitHub repository URL — the primary source for 1.12.1 addons, since the
-/// ecosystem is GitHub-centric with no central API. Prefers the latest release's .zip asset; falls
-/// back to a source zip of the default branch. Uses the public GitHub REST API (no auth needed).
+/// Installs an addon from a GitHub repository URL via a real git clone — the primary source for
+/// 1.12.1 addons, since the ecosystem is GitHub-centric with no central API. Each tracked repo gets
+/// a persistent local clone under <see cref="AddonPaths.AddonRepoCacheDir"/>, kept across app runs
+/// so update checks and pulls are incremental instead of a fresh download every time.
+///
+/// This deliberately avoids the api.github.com REST API entirely: it has an unauthenticated 60/hour
+/// rate limit that a handful of tracked addons can exhaust in one Refresh, and previously caused
+/// both false "no update" (a stale release tag hiding real commits pushed straight to the branch)
+/// and false "update available" results (a rate-limited resolution silently corrupting the stored
+/// baseline). Git's own smart-HTTP protocol — what `git clone`/`git ls-remote` use — isn't subject
+/// to that quota, and a commit sha is an unambiguous, single-format signature with no release-vs-
+/// branch mode-flapping possible.
 /// </summary>
 public sealed class GitHubAddonSource : IAddonSource
 {
@@ -27,185 +36,148 @@ public sealed class GitHubAddonSource : IAddonSource
     public bool CanHandle(string input)
         => input.Contains("github.com", StringComparison.OrdinalIgnoreCase) && RepoRegex.IsMatch(input);
 
-    // GuessedBranch is set only when the default-branch lookup below didn't come back (most
-    // commonly GitHub's unauthenticated REST API rate limit — 60/hour — already used up earlier in
-    // the same session installing other addons), so DownloadAsync knows it's worth retrying with
-    // the other common branch name if this guess turns out wrong.
-    //
-    // HighConfidence marks whether Signature is trustworthy enough to compare against a
-    // previously-stored one for update checking. A release tag is always trustworthy. A branch
-    // signature only is when BOTH the default-branch and the branch-sha lookups succeeded — if
-    // either one was skipped/rate-limited, the resulting signature is missing its real commit sha
-    // (or the branch itself was guessed), so comparing it against an earlier high-confidence
-    // signature would near-always "mismatch" and falsely claim an update is available even when
-    // nothing actually changed. GetLatestVersionSignatureAsync returns null instead in that case,
-    // so the caller just skips this check cycle rather than acting on an unreliable comparison.
-    private sealed record Resolved(string DownloadUrl, string Signature, string? GuessedBranch = null, bool HighConfidence = true);
-
-    /// <summary>
-    /// Figures out where to download from and what signature identifies "this version" — shared by
-    /// <see cref="DownloadAsync"/> and <see cref="GetLatestVersionSignatureAsync"/> so both agree.
-    /// </summary>
-    private async Task<Resolved> ResolveAsync(string owner, string repo, HttpClient http, CancellationToken ct)
-    {
-        // 1) Latest release with a .zip asset.
-        string? downloadUrl = null;
-        string tag = string.Empty;
-        try
-        {
-            using HttpResponseMessage rel =
-                await http.GetAsync($"https://api.github.com/repos/{owner}/{repo}/releases/latest", ct);
-            if (rel.IsSuccessStatusCode)
-            {
-                using JsonDocument doc = JsonDocument.Parse(await rel.Content.ReadAsStringAsync(ct));
-                JsonElement root = doc.RootElement;
-                if (root.TryGetProperty("tag_name", out JsonElement tagEl))
-                {
-                    tag = tagEl.GetString() ?? string.Empty;
-                }
-
-                if (root.TryGetProperty("assets", out JsonElement assets))
-                {
-                    foreach (JsonElement asset in assets.EnumerateArray())
-                    {
-                        string name = asset.GetProperty("name").GetString() ?? string.Empty;
-                        if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-                        {
-                            downloadUrl = asset.GetProperty("browser_download_url").GetString();
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _log.Debug($"GitHub releases lookup failed for {owner}/{repo}: {ex.Message}");
-        }
-
-        if (downloadUrl is not null)
-        {
-            return new Resolved(downloadUrl, $"release:{tag}");
-        }
-
-        // 2) Fall back to the default branch's source zip.
-        string branch = "master";
-        bool branchConfirmed = false;
-        try
-        {
-            using HttpResponseMessage repoResp =
-                await http.GetAsync($"https://api.github.com/repos/{owner}/{repo}", ct);
-            if (repoResp.IsSuccessStatusCode)
-            {
-                using JsonDocument doc = JsonDocument.Parse(await repoResp.Content.ReadAsStringAsync(ct));
-                if (doc.RootElement.TryGetProperty("default_branch", out JsonElement db))
-                {
-                    branch = db.GetString() ?? "master";
-                    branchConfirmed = true;
-                }
-            }
-            else if (IsRateLimited(repoResp))
-            {
-                _log.Warn($"GitHub API rate limit reached while resolving '{owner}/{repo}''s default branch; guessing '{branch}' for now.");
-            }
-        }
-        catch (Exception ex)
-        {
-            _log.Debug($"GitHub repo lookup failed for {owner}/{repo}: {ex.Message}");
-        }
-
-        string sha = branch;
-        bool shaConfirmed = false;
-        if (branchConfirmed)
-        {
-            try
-            {
-                using HttpResponseMessage branchResp =
-                    await http.GetAsync($"https://api.github.com/repos/{owner}/{repo}/branches/{branch}", ct);
-                if (branchResp.IsSuccessStatusCode)
-                {
-                    using JsonDocument doc = JsonDocument.Parse(await branchResp.Content.ReadAsStringAsync(ct));
-                    if (doc.RootElement.TryGetProperty("commit", out JsonElement commit) &&
-                        commit.TryGetProperty("sha", out JsonElement shaEl))
-                    {
-                        sha = shaEl.GetString() ?? branch;
-                        shaConfirmed = true;
-                    }
-                }
-                else if (IsRateLimited(branchResp))
-                {
-                    _log.Warn($"GitHub API rate limit reached while resolving '{owner}/{repo}''s '{branch}' commit; update checks will be skipped until it clears.");
-                }
-            }
-            catch (Exception ex)
-            {
-                _log.Debug($"GitHub branch lookup failed for {owner}/{repo}/{branch}: {ex.Message}");
-            }
-        }
-
-        string url = $"https://codeload.github.com/{owner}/{repo}/zip/refs/heads/{branch}";
-        string signature = branchConfirmed ? $"branch:{branch}@{sha}" : $"branch:{branch}";
-        return new Resolved(url, signature, GuessedBranch: branchConfirmed ? null : branch, HighConfidence: branchConfirmed && shaConfirmed);
-    }
-
-    private static bool IsRateLimited(HttpResponseMessage resp)
-        => resp.StatusCode == System.Net.HttpStatusCode.Forbidden
-           && resp.Headers.TryGetValues("X-RateLimit-Remaining", out IEnumerable<string>? values)
-           && values.Contains("0");
-
     public async Task<AddonDownload> DownloadAsync(string input, HttpClient http, CancellationToken ct)
     {
-        Match m = RepoRegex.Match(input);
-        string owner = m.Groups["owner"].Value;
-        string repo = m.Groups["repo"].Value.Replace(".git", string.Empty, StringComparison.OrdinalIgnoreCase);
+        (string owner, string repo) = ParseOwnerRepo(input);
+        string cloneUrl = $"https://github.com/{owner}/{repo}.git";
+        string cacheDir = AddonPaths.AddonRepoCacheDir(owner, repo);
 
-        Resolved resolved = await ResolveAsync(owner, repo, http, ct);
-
-        string temp = Path.Combine(Path.GetTempPath(), $"teronwow_addon_{Guid.NewGuid():N}.zip");
-        HttpResponseMessage resp = await http.GetAsync(resolved.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
-
-        // GuessedBranch means the default-branch API lookup didn't come back, so "master" was a
-        // blind guess — "main" is the only other branch name worth trying before giving up.
-        if (resp.StatusCode == System.Net.HttpStatusCode.NotFound && resolved.GuessedBranch is string guessed)
+        string headSha = await Task.Run(() =>
         {
-            string alt = string.Equals(guessed, "master", StringComparison.OrdinalIgnoreCase) ? "main" : "master";
-            _log.Warn($"'{owner}/{repo}': guessed branch '{guessed}' doesn't exist, retrying with '{alt}'.");
-            resp.Dispose();
-            string altUrl = $"https://codeload.github.com/{owner}/{repo}/zip/refs/heads/{alt}";
-            resp = await http.GetAsync(altUrl, HttpCompletionOption.ResponseHeadersRead, ct);
-            resolved = resolved with { Signature = $"branch:{alt}" };
-        }
+            ct.ThrowIfCancellationRequested();
+            using Repository repo2 = EnsureUpToDateClone(cloneUrl, cacheDir);
+            return repo2.Head.Tip.Sha;
+        }, ct);
 
-        using (resp)
-        {
-            resp.EnsureSuccessStatusCode();
-            await using FileStream fs = File.Create(temp);
-            await resp.Content.CopyToAsync(fs, ct);
-        }
+        string contentDir = Path.Combine(Path.GetTempPath(), $"teronwow_addon_{Guid.NewGuid():N}");
+        CopyWorkingTree(cacheDir, contentDir);
 
-        return new AddonDownload(temp, repo, resolved.Signature, AddonSourceKind.GitHub, $"https://github.com/{owner}/{repo}");
+        return new AddonDownload(contentDir, repo, headSha, AddonSourceKind.GitHub, $"https://github.com/{owner}/{repo}");
     }
 
     public async Task<string?> GetLatestVersionSignatureAsync(string input, HttpClient http, CancellationToken ct)
     {
-        Match m = RepoRegex.Match(input);
-        if (!m.Success)
+        if (!RepoRegex.IsMatch(input))
         {
             return null;
         }
 
-        string owner = m.Groups["owner"].Value;
-        string repo = m.Groups["repo"].Value.Replace(".git", string.Empty, StringComparison.OrdinalIgnoreCase);
+        (string owner, string repo) = ParseOwnerRepo(input);
+        string cloneUrl = $"https://github.com/{owner}/{repo}.git";
 
         try
         {
-            Resolved resolved = await ResolveAsync(owner, repo, http, ct);
-            return resolved.HighConfidence ? resolved.Signature : null;
+            return await Task.Run(() =>
+            {
+                ct.ThrowIfCancellationRequested();
+                return ResolveRemoteHeadSha(cloneUrl);
+            }, ct);
         }
         catch (Exception ex)
         {
-            _log.Debug($"GitHub update check failed for {owner}/{repo}: {ex.Message}");
+            _log.Debug($"Git remote HEAD check failed for {owner}/{repo}: {ex.Message}");
             return null;
         }
+    }
+
+    private static (string Owner, string Repo) ParseOwnerRepo(string input)
+    {
+        Match m = RepoRegex.Match(input);
+        string owner = m.Groups["owner"].Value;
+        string repo = m.Groups["repo"].Value.Replace(".git", string.Empty, StringComparison.OrdinalIgnoreCase);
+        return (owner, repo);
+    }
+
+    /// <summary>
+    /// The equivalent of `git ls-remote &lt;url&gt; HEAD` — resolves the default branch's current commit
+    /// sha over the network only, without touching (or needing) any local clone.
+    /// </summary>
+    private static string? ResolveRemoteHeadSha(string cloneUrl)
+    {
+        List<Reference> refs = Repository.ListRemoteReferences(cloneUrl).ToList();
+        Reference? head = refs.FirstOrDefault(r => r.CanonicalName == "HEAD");
+        if (head is null)
+        {
+            return null;
+        }
+
+        // HEAD is a symbolic ref (e.g. "refs/heads/main"); resolve it to the direct ref carrying the sha.
+        Reference? target = refs.FirstOrDefault(r => r.CanonicalName == head.TargetIdentifier);
+        return target?.TargetIdentifier;
+    }
+
+    /// <summary>
+    /// Clones into <paramref name="cacheDir"/> if it isn't already a valid repo there, otherwise
+    /// fetches and hard-resets the checked-out branch to the remote's current tip (this cache is a
+    /// read-only mirror the launcher owns exclusively, so discarding any local drift is always safe
+    /// and correct — equivalent to `git reset --hard origin/&lt;branch&gt;`).
+    /// </summary>
+    private Repository EnsureUpToDateClone(string cloneUrl, string cacheDir)
+    {
+        if (Directory.Exists(cacheDir) && !Repository.IsValid(cacheDir))
+        {
+            _log.Warn($"Addon repo cache at {cacheDir} is corrupt; re-cloning from scratch.");
+            DirectoryHelper.DeleteRecursive(cacheDir);
+        }
+
+        if (!Directory.Exists(cacheDir))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(cacheDir)!);
+            Repository.Clone(cloneUrl, cacheDir);
+            return new Repository(cacheDir);
+        }
+
+        var repo = new Repository(cacheDir);
+        try
+        {
+            string branchName = repo.Head.FriendlyName;
+            Remote origin = repo.Network.Remotes["origin"];
+            Commands.Fetch(repo, origin.Name, Array.Empty<string>(), null, "addon update check");
+
+            Branch? remoteBranch = repo.Branches[$"origin/{branchName}"];
+            if (remoteBranch is not null)
+            {
+                repo.Reset(ResetMode.Hard, remoteBranch.Tip);
+            }
+
+            return repo;
+        }
+        catch
+        {
+            repo.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Copies a git working tree into a fresh directory, leaving the ".git" folder behind.</summary>
+    private static void CopyWorkingTree(string source, string dest)
+    {
+        Directory.CreateDirectory(dest);
+        foreach (string dir in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            if (IsUnderGitDir(source, dir))
+            {
+                continue;
+            }
+
+            Directory.CreateDirectory(dir.Replace(source, dest));
+        }
+
+        foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            string? fileDir = Path.GetDirectoryName(file);
+            if (fileDir is not null && IsUnderGitDir(source, fileDir))
+            {
+                continue;
+            }
+
+            File.Copy(file, file.Replace(source, dest), overwrite: true);
+        }
+    }
+
+    private static bool IsUnderGitDir(string root, string dir)
+    {
+        string relative = Path.GetRelativePath(root, dir);
+        return relative == ".git" || relative.StartsWith(".git" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 }

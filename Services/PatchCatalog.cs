@@ -117,13 +117,13 @@ public static class PatchCatalog
         {
             Id = "soundchannels",
             Name = "Sound channels",
-            Description = "Default software sound channel count (game default 12; values above 64 may crash).",
+            Description = "Default software sound channel count (game default 12).",
             Category = PatchCategory.VanillaTweak,
             DefaultEnabled = true,
-            Parameter = new PatchParameter { Min = 1, Max = 999, Default = 64, IsInteger = true },
+            Parameter = new PatchParameter { Min = 1, Max = 256, Default = 64, IsInteger = true },
             BuildSteps = v =>
             {
-                int channels = Math.Clamp((int)Math.Round(v ?? 64), 1, 999);
+                int channels = Math.Clamp((int)Math.Round(v ?? 64), 1, 256);
                 byte[] buffer = new byte[4];
                 byte[] ascii = Encoding.ASCII.GetBytes(channels.ToString(CultureInfo.InvariantCulture));
                 Array.Copy(ascii, buffer, Math.Min(ascii.Length, 4));

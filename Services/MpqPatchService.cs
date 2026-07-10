@@ -27,7 +27,10 @@ public sealed class MpqPatchService
 
     public string DataDirectory(string wowDir) => Path.Combine(wowDir, DataFolderName);
 
-    /// <summary>All custom MPQ patches in the Data folder, sorted by slot letter.</summary>
+    /// <summary>All custom MPQ patches in the Data folder, sorted by slot letter. Best-effort: a
+    /// transient scan failure (locked folder, permissions hiccup) degrades to "none found" rather
+    /// than throwing, since this is reachable from settings-save/refresh paths with no enclosing
+    /// handler.</summary>
     public List<MpqPatch> Scan(string wowDir)
     {
         var result = new List<MpqPatch>();
@@ -37,7 +40,18 @@ public sealed class MpqPatchService
             return result;
         }
 
-        foreach (string path in Directory.EnumerateFiles(data, "*.mpq"))
+        List<string> files;
+        try
+        {
+            files = Directory.EnumerateFiles(data, "*.mpq").ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"Could not scan {data} for MPQ patches: {ex.Message}");
+            return result;
+        }
+
+        foreach (string path in files)
         {
             string name = Path.GetFileName(path);
             Match m = CustomPatchRegex.Match(name);

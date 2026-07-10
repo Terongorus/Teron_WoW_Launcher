@@ -16,6 +16,10 @@ internal static class User32
     public const uint KEYEVENTF_KEYUP = 0x0002;
     public const uint KEYEVENTF_UNICODE = 0x0004;
 
+    public const uint WM_NULL = 0x0000;
+    public const uint SMTO_BLOCK = 0x0001;
+    public const uint SMTO_ABORTIFHUNG = 0x0002;
+
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [DllImport("user32.dll")]
@@ -30,8 +34,18 @@ internal static class User32
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    // Used to probe whether the game window's message pump is keeping up (a proxy for "done loading
+    // assets") — needs only a window handle, no process-level access right at all, unlike the
+    // GetProcessIoCounters approach this replaced (see AutoLoginService's WaitForLoadingToSettle).
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct INPUT

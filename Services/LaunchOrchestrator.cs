@@ -8,6 +8,19 @@ using TeronWoWLauncher.Models;
 
 namespace TeronWoWLauncher.Services;
 
+/// <summary>Ok covers "no backup yet" and "first time this check has ever run" (nothing to compare against) as well as a genuine match.</summary>
+public enum BackupIntegrityStatus { Ok, Mismatch }
+
+/// <summary>
+/// <paramref name="ProcessId"/> is set whenever a game process was actually created, even if a later
+/// step (e.g. auto-login) had trouble — the caller can use it to track "is the game we just launched
+/// still alive" via <see cref="System.Diagnostics.Process.GetProcessById"/>, which is far more
+/// reliable right after launch than re-scanning and matching by module path (see
+/// <see cref="GameProcessService"/>'s own doc comment on why that can throw/return a false negative
+/// for a process still settling from injection).
+/// </summary>
+public sealed record PlayResult(bool Success, int? ProcessId);
+
 /// <summary>
 /// Ties the individual services together into the single, fixed-order "Play" flow:
 ///   1-2. rebuild WoW.exe from the pristine backup with the enabled executable patches
@@ -32,7 +45,7 @@ public sealed class LaunchOrchestrator
 
     public LaunchOrchestrator(SettingsService settings) => _settings = settings;
 
-    public async Task<bool> PlayAsync(IProgress<string>? progress = null, CancellationToken ct = default)
+    public async Task<PlayResult> PlayAsync(IProgress<string>? progress = null, CancellationToken ct = default)
     {
         void Report(string message)
         {
@@ -46,7 +59,7 @@ public sealed class LaunchOrchestrator
         if (!File.Exists(wowExe))
         {
             _log.Error($"WoW.exe not found at {wowExe}. Set the game folder in Settings.");
-            return false;
+            return new PlayResult(false, null);
         }
 
         // 1-2. Executable patches, always rebuilt from the pristine backup so order is guaranteed.
@@ -72,7 +85,7 @@ public sealed class LaunchOrchestrator
         catch (Exception ex)
         {
             _log.Error("Launch/injection failed.", ex);
-            return false;
+            return new PlayResult(false, null);
         }
 
         // Remember the accepted DLL list so the UI can flag changes next time.
@@ -91,7 +104,7 @@ public sealed class LaunchOrchestrator
         }
 
         Report("Launch complete.");
-        return true;
+        return new PlayResult(true, result.ProcessId);
     }
 
     /// <summary>
@@ -119,6 +132,50 @@ public sealed class LaunchOrchestrator
         {
             _log.Error("Applying patches failed.", ex);
         }
+    }
+
+    /// <summary>
+    /// Verifies WoW.exe.backup still matches the hash recorded when it was created, so disk
+    /// corruption, an interrupted write, or external tampering doesn't silently keep getting used as
+    /// the "pristine" source for every future patch rebuild. If no hash has ever been recorded yet
+    /// (e.g. a backup that predates this check), the current hash is adopted as the baseline rather
+    /// than flagging a false mismatch on a backup nothing has actually verified before.
+    /// </summary>
+    public BackupIntegrityStatus VerifyPristineBackupIntegrity(string wowDir)
+    {
+        if (!_patch.BackupExists(wowDir))
+        {
+            return BackupIntegrityStatus.Ok;
+        }
+
+        string? currentHash = _patch.ComputeBackupHash(wowDir);
+        string? storedHash = _settings.Current.PristineBackupHash;
+
+        if (storedHash is null)
+        {
+            _settings.Current.PristineBackupHash = currentHash;
+            _settings.Save();
+            return BackupIntegrityStatus.Ok;
+        }
+
+        return string.Equals(currentHash, storedHash, StringComparison.OrdinalIgnoreCase)
+            ? BackupIntegrityStatus.Ok
+            : BackupIntegrityStatus.Mismatch;
+    }
+
+    /// <summary>
+    /// Discards a backup that failed integrity verification, along with its recorded hash and the
+    /// applied-patch signature, so the next patch rebuild re-establishes both fresh (from whatever
+    /// WoW.exe is on disk at that point — e.g. right after a client repair).
+    /// </summary>
+    public void DiscardCorruptBackup(string wowDir)
+    {
+        try { File.Delete(_patch.BackupPath(wowDir)); }
+        catch (Exception ex) { _log.Warn($"Could not delete corrupt {PatchService.BackupFileName}: {ex.Message}"); }
+
+        _settings.Current.PristineBackupHash = null;
+        _settings.Current.AppliedPatchSignature = null;
+        _settings.Save();
     }
 
     /// <summary>
@@ -165,9 +222,17 @@ public sealed class LaunchOrchestrator
 
         if (enabled.Count > 0)
         {
+            bool backupExistedBefore = _patch.BackupExists(wowDir);
             if (!_patch.EnsurePristineBackup(wowDir, catalog))
             {
                 throw new InvalidOperationException("Could not establish a pristine WoW.exe backup.");
+            }
+
+            // Record the hash only at the moment the backup is actually (re)created — it never
+            // changes after that, so this only ever runs once per backup's lifetime, not every rebuild.
+            if (!backupExistedBefore)
+            {
+                _settings.Current.PristineBackupHash = _patch.ComputeBackupHash(wowDir);
             }
 
             Dictionary<string, double?> parameters = catalog.ToDictionary(p => p.Id, EffectiveParam);

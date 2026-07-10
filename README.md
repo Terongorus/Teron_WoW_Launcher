@@ -33,7 +33,10 @@ Your account/password fields and auto-login toggle live here, along with a live-
 this README and the changelog — so you can check what changed without leaving the app or digging
 through folders. Auto-login types your credentials directly (bypassing your keyboard layout, so a
 non-English layout can't garble your password) and waits for the client to actually finish
-loading before it types, instead of guessing a fixed delay.
+loading before it types, instead of guessing a fixed delay. The Realmlist label carries a live
+status dot — green when the auth server accepts a connection, red when a real host refuses or
+times out, gray when the address doesn't even resolve — and the field itself remembers every
+realm you've actually connected to, offered back as a history dropdown.
 
 ### Tweaks
 
@@ -70,7 +73,10 @@ updates, and picks up any folder you dropped into `Interface\AddOns` by hand, pr
 adopting anything that might conflict with what's already tracked. The search box filters the list
 live by name as your addon count grows, and each row's info button shows that addon's own
 README — from its GitHub repo, a local README file, or its `.toc` as a last resort — without
-leaving the app.
+leaving the app. If several addons have updates queued up, **Update All** installs every one of
+them in a single click instead of working through the list one row at a time; and if you'd rather
+an addon stayed on its current version even when a newer one is published, its Details dialog has
+an "Ignore updates" checkbox that permanently stops it from being flagged.
 
 ### Settings
 
@@ -85,6 +91,8 @@ at once.
 
 A running, live log of everything the launcher does — patching, injection, downloads, addon
 installs — for when something doesn't go as expected and you want to see exactly what happened.
+Entries are color-coded by severity, and Clear, Copy, and Open Folder actions are right there on
+the tab.
 
 ## Requirements
 
@@ -115,7 +123,7 @@ own code.
 
 ## Project status
 
-Version 1.8.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
+Version 1.10.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
 ## License

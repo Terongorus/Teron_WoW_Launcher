@@ -55,6 +55,100 @@
         </Style>
 
         <!--
+          Shared page-card look for a tab's content: a fixed-width, horizontally centered dark card, so
+          content reads as one consistent column instead of stretching edge-to-edge when the window is
+          maximized. Tweaks and Settings apply this directly to their one root Border; MPQ Patches and
+          Addons use the split PageCardTopStyle/PageCardBottomStyle pair below instead (they need a
+          pinned header above a separately-scrollable list). DLLs isn't part of this family — it's a
+          genuinely wide side-by-side browse layout, not a narrow form, so it intentionally stays
+          full-width; Log needs the pinned-header-over-list split but also needs real width (long
+          timestamps/messages/stack traces), so it uses the WideCardTopStyle/WideCardBottomStyle pair
+          further below instead — same split structure and visual treatment, no MaxWidth cap.
+
+          HorizontalAlignment is Stretch, not Center: Stretch makes the Border fill the width its
+          parent offers, and MaxWidth then clips that down to the cap — at which point WPF centers the
+          clipped element automatically. Center alone would size the Border to its own content's
+          natural width instead, so it would never reach the cap and every tab's card would end up a
+          different width depending on what that tab happens to contain.
+        -->
+        <Style x:Key="PageCardStyle" TargetType="{x:Type Border}">
+            <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="Margin" Value="24"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="Background" Value="#101014"/>
+            <Setter Property="BorderBrush" Value="#3A3A42"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="24"/>
+        </Style>
+
+        <!--
+          Split card for tabs that need a pinned header above a scrollable list (MPQ Patches, Addons):
+          two Borders stacked in a plain Auto/Star Grid — Top holds the header/buttons and is never
+          inside a ScrollViewer, so it can't move; Bottom sits inside a ScrollViewer whose OWN scrollbar
+          is hidden (see the tab XAML: MainWindow drives scrolling through a separate, standalone
+          ScrollBar in a dedicated Grid column instead). Both Borders are Auto-height and top-aligned,
+          so a short list produces a short card (no forced fill-to-bottom dead space); a long list grows
+          past the Star row's available height and that standalone ScrollBar starts scrolling just the
+          list while the header stays put. Rounded/bordered only on the edges that don't touch, so the
+          pair reads as one seamless card.
+
+          Both styles use the same symmetric Margin — width/centering no longer needs to account for a
+          scrollbar at all here, because MainWindow.xaml keeps the scrollbar out of both Borders' own
+          width calculation entirely (it lives in a sibling Grid column, sized via SharedSizeGroup so it
+          can never drift between Top and Bottom regardless of how wide the real scrollbar renders).
+        -->
+        <Style x:Key="PageCardTopStyle" TargetType="{x:Type Border}">
+            <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="Margin" Value="24,24,24,0"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="Background" Value="#101014"/>
+            <Setter Property="BorderBrush" Value="#3A3A42"/>
+            <Setter Property="BorderThickness" Value="1,1,1,0"/>
+            <Setter Property="CornerRadius" Value="6,6,0,0"/>
+            <Setter Property="Padding" Value="24,24,24,16"/>
+        </Style>
+        <Style x:Key="PageCardBottomStyle" TargetType="{x:Type Border}">
+            <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="Margin" Value="24,0,24,24"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
+            <Setter Property="Background" Value="#101014"/>
+            <Setter Property="BorderBrush" Value="#3A3A42"/>
+            <Setter Property="BorderThickness" Value="1,0,1,1"/>
+            <Setter Property="CornerRadius" Value="0,0,6,6"/>
+            <Setter Property="Padding" Value="24,16,24,24"/>
+        </Style>
+
+        <!--
+          Full-width twin of PageCardTopStyle/PageCardBottomStyle, for tabs whose content doesn't fit
+          a narrow 720px form column — the Log tab's lines (timestamps, full exception text) need
+          real width, the same reason DLLs stays outside the PageCardStyle family entirely. Same
+          pinned-header-over-scrollable-list split and the same visual treatment (background/border/
+          corner-radius/padding), just without the MaxWidth cap; margin/padding match DLLs' own
+          Margin="16" full-width convention instead of the 24px used by the narrow family.
+        -->
+        <Style x:Key="WideCardTopStyle" TargetType="{x:Type Border}">
+            <Setter Property="Margin" Value="16,16,16,0"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="Background" Value="#101014"/>
+            <Setter Property="BorderBrush" Value="#3A3A42"/>
+            <Setter Property="BorderThickness" Value="1,1,1,0"/>
+            <Setter Property="CornerRadius" Value="6,6,0,0"/>
+            <Setter Property="Padding" Value="16,16,16,10"/>
+        </Style>
+        <Style x:Key="WideCardBottomStyle" TargetType="{x:Type Border}">
+            <Setter Property="Margin" Value="16,0,16,16"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
+            <Setter Property="Background" Value="#101014"/>
+            <Setter Property="BorderBrush" Value="#3A3A42"/>
+            <Setter Property="BorderThickness" Value="1,0,1,1"/>
+            <Setter Property="CornerRadius" Value="0,0,6,6"/>
+            <Setter Property="Padding" Value="16,10,16,16"/>
+        </Style>
+
+        <!--
           Markdig.Wpf renders headings with a hardcoded black Foreground and gives code spans a light
           gray background — both invisible/unreadable against this app's dark theme. These override the
           library's own named style-resource keys (its built-in theming extension point, defined in its
@@ -122,6 +216,25 @@
             <Setter Property="BorderBrush" Value="#4A4A54"/>
             <Setter Property="BorderThickness" Value="1,1,0,0"/>
             <Setter Property="Padding" Value="6,4"/>
+        </Style>
+
+        <!--
+          MarkdownViewer's default template (used everywhere else via CompactMarkdownViewer/plain
+          usage) shows a built-in zoom/print toolbar (IsToolBarVisible defaults to true) — an OS-
+          styled strip that clashes with this app's chrome and makes no sense floating over a
+          full-size document. This is otherwise the library's stock FlowDocumentScrollViewer
+          presentation (real scrollbars, unlike CompactMarkdownViewer's hidden ones), so its internal
+          ScrollViewer/ScrollBar still pick up the app-wide modern scrollbar style automatically.
+          App-wide (not per-dialog) since both MarkdownPreviewDialog and AddonDetailsDialog use it.
+        -->
+        <Style x:Key="ExpandedMarkdownViewer" TargetType="{x:Type markdig:MarkdownViewer}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type markdig:MarkdownViewer}">
+                        <FlowDocumentScrollViewer Document="{TemplateBinding Document}" IsToolBarVisible="False"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <!--
@@ -265,6 +378,122 @@
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
                                 <Setter Property="BorderBrush" Value="#E6C067"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!--
+          First ComboBox in the app (the Realmlist history dropdown) — same palette as TextBox/
+          PasswordBox above (background/border/focus colors), since there's no theme for it to
+          inherit otherwise and the stock WPF chrome is light/Aero, which would clash badly here.
+          Built from the standard ComboBox template anatomy: PART_EditableTextBox and PART_Popup are
+          the exact names ComboBox's own code looks for via OnApplyTemplate, so keyboard/selection
+          behavior (arrow keys, Enter, Escape, edit-and-commit) all keep working without needing to
+          reimplement any of it here — only the visuals are replaced.
+        -->
+        <Style TargetType="{x:Type ComboBox}">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
+            <Setter Property="Background" Value="#26262B"/>
+            <Setter Property="Foreground" Value="#EDEDED"/>
+            <Setter Property="BorderBrush" Value="#3A3A42"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="5,4"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ComboBox}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="28"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Border x:Name="Bd" Grid.ColumnSpan="2"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="6" SnapsToDevicePixels="True"/>
+
+                            <!-- Shown only when not editable; the editable case below covers this app's one usage. -->
+                            <ContentPresenter x:Name="ContentSite" Grid.Column="0"
+                                              Margin="{TemplateBinding Padding}"
+                                              VerticalAlignment="Center" HorizontalAlignment="Left"
+                                              IsHitTestVisible="False" Visibility="Collapsed"
+                                              Content="{TemplateBinding SelectionBoxItem}"/>
+
+                            <TextBox x:Name="PART_EditableTextBox" Grid.Column="0"
+                                     Margin="{TemplateBinding Padding}"
+                                     VerticalAlignment="Center"
+                                     Background="Transparent" BorderThickness="0"
+                                     Foreground="{TemplateBinding Foreground}"
+                                     CaretBrush="{TemplateBinding Foreground}"
+                                     Focusable="{TemplateBinding IsEditable}"
+                                     IsReadOnly="{TemplateBinding IsReadOnly}"
+                                     Visibility="Collapsed"/>
+
+                            <ToggleButton x:Name="ToggleButton" Grid.Column="1"
+                                          Focusable="False" ClickMode="Press" Background="Transparent" BorderThickness="0"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="{x:Type ToggleButton}">
+                                        <Border Background="Transparent">
+                                            <TextBlock Text="&#xE70D;" FontFamily="Segoe Fluent Icons" FontSize="10"
+                                                       Foreground="#9A9AA2" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+
+                            <Popup x:Name="PART_Popup" Grid.ColumnSpan="2"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   Placement="Bottom" AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
+                                <Border Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6"
+                                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                        MaxHeight="220" Margin="0,4,0,0">
+                                    <ScrollViewer Margin="4" SnapsToDevicePixels="True">
+                                        <ItemsPresenter/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEditable" Value="True">
+                                <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#5E5E6A"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#E6C067"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.55"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="{x:Type ComboBoxItem}">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
+            <Setter Property="Foreground" Value="#EDEDED"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ComboBoxItem}">
+                        <Border x:Name="Bd" Background="Transparent" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#2A2A30"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#34343C"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>

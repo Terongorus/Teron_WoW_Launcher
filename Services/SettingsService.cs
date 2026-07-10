@@ -49,7 +49,7 @@ public sealed class SettingsService
         {
             AppPaths.EnsureDataRoot();
             string json = JsonSerializer.Serialize(Current, JsonOptions);
-            File.WriteAllText(AppPaths.SettingsFilePath, json);
+            AtomicFile.WriteAllText(AppPaths.SettingsFilePath, json);
         }
         catch (Exception ex)
         {

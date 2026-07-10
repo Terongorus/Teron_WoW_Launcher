@@ -37,6 +37,13 @@ public sealed class LauncherSettings
     /// <summary>Desired realmlist value written to realmlist.wtf (e.g. "set realmlist logon.server").</summary>
     public string Realmlist { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Realmlist values the user has previously used, most-recent first — offered as a dropdown next
+    /// to the free-text realmlist field so switching between a private server's several login realms
+    /// (e.g. login2/login3 during downtime) doesn't require retyping the address each time.
+    /// </summary>
+    public List<string> RealmlistHistory { get; set; } = new();
+
     /// <summary>Ids of executable patches the user has enabled (applied in fixed catalog order).</summary>
     public List<string> EnabledPatchIds { get; set; } = new();
 
@@ -48,6 +55,13 @@ public sealed class LauncherSettings
     /// selection, the launcher skips re-patching entirely instead of rebuilding every launch.
     /// </summary>
     public string? AppliedPatchSignature { get; set; }
+
+    /// <summary>
+    /// SHA-256 of WoW.exe.backup at the moment it was created, so a later mismatch (disk corruption,
+    /// an interrupted write from before the atomic-rename fix, or external tampering) can be detected
+    /// instead of silently rebuilding every future patch from a backup that's no longer truly pristine.
+    /// </summary>
+    public string? PristineBackupHash { get; set; }
 
     // --- Window placement, restored on the next launch. Null = use the XAML defaults (first run,
     // or the saved position no longer falls on any connected monitor). Named to avoid colliding with
