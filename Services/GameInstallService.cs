@@ -207,6 +207,15 @@ public sealed class GameInstallService
             .ToList();
         string strip = topLevels.Count == 1 ? topLevels[0] + "/" : string.Empty;
 
+        // destDirFull always ends with a separator so the StartsWith prefix check below can't be
+        // fooled by a sibling folder that merely shares destDir as a string prefix (e.g. "...\Wow" vs
+        // a malicious entry resolving to "...\WowEvil").
+        string destDirFull = Path.GetFullPath(destDir);
+        if (!destDirFull.EndsWith(Path.DirectorySeparatorChar))
+        {
+            destDirFull += Path.DirectorySeparatorChar;
+        }
+
         foreach (ZipArchiveEntry entry in archive.Entries)
         {
             if (entry.FullName.EndsWith('/'))
@@ -226,8 +235,20 @@ public sealed class GameInstallService
             }
 
             string dest = Path.Combine(destDir, rel.Replace('/', Path.DirectorySeparatorChar));
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            entry.ExtractToFile(dest, overwrite: true);
+
+            // Zip Slip guard: a malicious or corrupted archive could contain an entry like
+            // "../../../Windows/System32/evil.dll" that would otherwise extract outside destDir
+            // entirely. Path.Combine doesn't normalize ".." segments away, so the check has to happen
+            // after resolving the full path, not on the raw entry name.
+            string destFull = Path.GetFullPath(dest);
+            if (!destFull.StartsWith(destDirFull, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Refusing to extract '{entry.FullName}' — its path resolves outside the install folder.");
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(destFull)!);
+            entry.ExtractToFile(destFull, overwrite: true);
         }
     }
 }

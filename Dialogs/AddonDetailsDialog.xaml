@@ -26,6 +26,12 @@
             <Button DockPanel.Dock="Top" Style="{StaticResource WindowCloseButtonStyle}" Content="&#xE8BB;"
                     HorizontalAlignment="Right" Click="OnCloseClicked" ToolTip="Close"/>
 
+            <TextBlock x:Name="RepoLinkText" DockPanel.Dock="Top" Margin="16,12,16,0" Visibility="Collapsed">
+                <Hyperlink x:Name="RepoLink" RequestNavigate="OnRepoLinkNavigate" Foreground="#E6C067">
+                    View on GitHub &#x2197;
+                </Hyperlink>
+            </TextBlock>
+
             <CheckBox DockPanel.Dock="Bottom" x:Name="IgnoreUpdatesCheck"
                       Content="Ignore updates for this addon"
                       Margin="16,0,16,16"

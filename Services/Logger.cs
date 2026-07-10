@@ -6,7 +6,11 @@ namespace TeronWoWLauncher.Services;
 
 public enum LogLevel { Debug, Info, Warn, Error }
 
-public readonly record struct LogEntry(DateTime Timestamp, LogLevel Level, string Message);
+public readonly record struct LogEntry(DateTime Timestamp, LogLevel Level, string Message)
+{
+    /// <summary>Fixed-width, upper-cased level for the Log tab's bracketed "[LEVEL]" column.</summary>
+    public string LevelDisplay => Level.ToString().ToUpperInvariant().PadRight(5);
+}
 
 /// <summary>
 /// Minimal, dependency-free logger. Writes to a per-day file under

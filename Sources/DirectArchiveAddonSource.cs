@@ -3,13 +3,15 @@ using System.IO;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using SharpCompress.Archives;
+using SharpCompress.Common;
 using TeronWoWLauncher.Models;
 
 namespace TeronWoWLauncher.Sources;
 
 /// <summary>
-/// Fallback source: a local archive file the user already downloaded, or a direct archive URL. Only
-/// the archive itself matters — extraction supports .zip/.rar/.7z via <see cref="Services.AddonInstaller"/>.
+/// Fallback source: a local archive file the user already downloaded, or a direct archive URL.
+/// Extraction supports .zip/.rar/.7z via SharpCompress (the BCL only handles .zip).
 /// </summary>
 public sealed class DirectArchiveAddonSource : IAddonSource
 {
@@ -17,25 +19,35 @@ public sealed class DirectArchiveAddonSource : IAddonSource
 
     public async Task<AddonDownload> DownloadAsync(string input, HttpClient http, CancellationToken ct)
     {
-        string temp = Path.Combine(Path.GetTempPath(), $"teronwow_addon_{Guid.NewGuid():N}{Path.GetExtension(input)}");
+        string archivePath = Path.Combine(Path.GetTempPath(), $"teronwow_addon_{Guid.NewGuid():N}{Path.GetExtension(input)}");
         string? signature;
 
-        if (File.Exists(input))
+        try
         {
-            File.Copy(input, temp, overwrite: true);
-            signature = null; // a local file has no "remote" to compare against later
-        }
-        else
-        {
-            signature = await GetLatestVersionSignatureAsync(input, http, ct);
-            using HttpResponseMessage resp = await http.GetAsync(input, HttpCompletionOption.ResponseHeadersRead, ct);
-            resp.EnsureSuccessStatusCode();
-            await using FileStream fs = File.Create(temp);
-            await resp.Content.CopyToAsync(fs, ct);
-        }
+            if (File.Exists(input))
+            {
+                File.Copy(input, archivePath, overwrite: true);
+                signature = null; // a local file has no "remote" to compare against later
+            }
+            else
+            {
+                signature = await GetLatestVersionSignatureAsync(input, http, ct);
+                using HttpResponseMessage resp = await http.GetAsync(input, HttpCompletionOption.ResponseHeadersRead, ct);
+                resp.EnsureSuccessStatusCode();
+                await using FileStream fs = File.Create(archivePath);
+                await resp.Content.CopyToAsync(fs, ct);
+            }
 
-        string name = Path.GetFileNameWithoutExtension(input);
-        return new AddonDownload(temp, name, signature, AddonSourceKind.Archive, input);
+            string contentDir = Path.Combine(Path.GetTempPath(), $"teronwow_addon_{Guid.NewGuid():N}");
+            ArchiveFactory.WriteToDirectory(archivePath, contentDir, new ExtractionOptions { ExtractFullPath = true, Overwrite = true });
+
+            string name = Path.GetFileNameWithoutExtension(input);
+            return new AddonDownload(contentDir, name, signature, AddonSourceKind.Archive, input);
+        }
+        finally
+        {
+            try { File.Delete(archivePath); } catch { /* temp cleanup best-effort */ }
+        }
     }
 
     public async Task<string?> GetLatestVersionSignatureAsync(string input, HttpClient http, CancellationToken ct)

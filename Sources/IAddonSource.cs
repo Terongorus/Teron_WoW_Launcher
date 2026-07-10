@@ -7,13 +7,16 @@ using TeronWoWLauncher.Models;
 namespace TeronWoWLauncher.Sources;
 
 /// <summary>
-/// A downloaded addon archive ready to be installed, plus metadata for tracking.
-/// <paramref name="RemoteVersionSignature"/> is an opaque signature of the source at download time
-/// (release tag, commit sha, or URL ETag/size) used only to detect future updates — the addon's
-/// displayed version comes from its own .toc instead.
+/// An addon's files, staged in <paramref name="ContentDir"/> and ready to be installed, plus
+/// metadata for tracking. <paramref name="ContentDir"/> is always a plain directory (an extracted
+/// archive, or a git working tree copy) — the caller deletes it after install, so it must be a
+/// throwaway copy, never a source's own persistent cache. <paramref name="RemoteVersionSignature"/>
+/// is an opaque signature of the source at download time (a git commit sha, or a direct URL's
+/// ETag/size) used only to detect future updates — the addon's displayed version comes from its
+/// own .toc instead.
 /// </summary>
 public sealed record AddonDownload(
-    string ArchivePath,
+    string ContentDir,
     string? SuggestedName,
     string? RemoteVersionSignature,
     AddonSourceKind Kind,

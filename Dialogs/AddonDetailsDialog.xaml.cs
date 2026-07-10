@@ -1,6 +1,8 @@
+using System;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Navigation;
 using TeronWoWLauncher.Services;
 
 namespace TeronWoWLauncher.Dialogs;
@@ -13,12 +15,19 @@ namespace TeronWoWLauncher.Dialogs;
 /// </summary>
 public partial class AddonDetailsDialog : Window
 {
-    public AddonDetailsDialog(string title, string markdown, bool ignoreUpdates)
+    public AddonDetailsDialog(string title, string markdown, bool ignoreUpdates, string? repoUrl = null)
     {
         InitializeComponent();
         Title = title;
         Viewer.Markdown = markdown;
         IgnoreUpdatesCheck.IsChecked = ignoreUpdates;
+
+        if (repoUrl is not null && Uri.TryCreate(repoUrl, UriKind.Absolute, out Uri? uri))
+        {
+            RepoLink.NavigateUri = uri;
+            RepoLinkText.Visibility = Visibility.Visible;
+        }
+
         WindowChromeHelper.FixMaximizedBounds(this);
         MarkdownScrollHelper.AttachFastScroll(Viewer);
     }
@@ -35,6 +44,17 @@ public partial class AddonDetailsDialog : Window
             return;
         }
 
+        OpenUrl(url);
+    }
+
+    private void OnRepoLinkNavigate(object sender, RequestNavigateEventArgs e)
+    {
+        OpenUrl(e.Uri.AbsoluteUri);
+        e.Handled = true;
+    }
+
+    private static void OpenUrl(string url)
+    {
         try
         {
             Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });

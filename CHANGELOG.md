@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [1.10.0] - 2026-07-11
+
+### Added
+
+- Live realm status indicator next to the Realmlist label: a dot that turns green when the
+  configured realm's auth server actually accepts a TCP connection, red when a real host refuses
+  or times out, and gray when the address doesn't even resolve via DNS — deliberately not a ping,
+  since a host can answer ICMP while its login service is down (or block ICMP while fully up) and
+  prove nothing either way.
+- The Realmlist field is now an editable dropdown remembering every realm you've actually used.
+  Only realms that resolve get cached (a typo'd address is discarded, not saved), and a cached
+  realm is automatically pruned if a later check finds it no longer resolves at all.
+- A dimmed background image behind the tab content, randomly chosen once per launch from a set of
+  Turtle WoW concept art.
+- The Log tab has been redesigned to match the rest of the app — a pinned header and toolbar over
+  a scrolling list, entries color-coded by severity, and Clear, Copy, and Open Folder actions.
+
+### Fixed
+
+- The Play button could still launch a second WoW.exe instance while the first was mid-load: the
+  guard now tracks the actual launched process by PID instead of relying on a fragile
+  path-matching check that could silently misreport "not running" right after injection.
+- Auto-login could type credentials into the wrong window if focus shifted away during the
+  loading screen — it now verifies the game window is actually focused, retrying briefly before
+  giving up, rather than typing blind.
+- Auto-login's load-detection no longer needs elevated access to the freshly-launched process
+  (which intermittently failed with "access is denied" right after injection); it now waits on
+  the game window's own responsiveness instead, with the configured delay kept as a true fallback
+  if that check can't complete in time.
+- WoW.exe patch rebuilds/restores, and writes to `settings.json`, `addons.json`, `realmlist.wtf`,
+  `dlls.txt`, and `dlls.txt.cache`, are now atomic (write-to-temp-then-rename) instead of writing
+  directly over the live file — an interruption mid-write (crash, killed process, disk hiccup)
+  can no longer leave any of them corrupted or truncated. Writing `realmlist.wtf` now also reads
+  it back afterward to confirm the change actually took, warning in the Log tab if it didn't.
+- Added an integrity check for the pristine WoW.exe backup that every executable patch is rebuilt
+  from, run once per launch — if it no longer matches the hash recorded when it was first created
+  (disk corruption, an interrupted write, tampering), you're offered a one-click repair instead of
+  patches silently building on a backup that's no longer actually clean.
+- Fixed a path-traversal (Zip Slip) vulnerability in the game installer's archive extraction,
+  where a maliciously-crafted zip entry could have written outside the intended install folder.
+- A number of file and folder reads across the DLL manager, MPQ patch manager, and local addon
+  scanner could throw on a transient failure (a locked file, an antivirus scan, a permissions
+  hiccup) with nothing catching it — several of these were reachable from startup or from a
+  settings auto-save with no enclosing handler, and could have crashed the whole app. All of them
+  now degrade to "nothing found" and log a warning instead.
+- The Log tab's entry list is now capped instead of growing unbounded for the lifetime of a long
+  launcher session.
+
 ## [1.9.0] - 2026-07-08
 
 ### Added

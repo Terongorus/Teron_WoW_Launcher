@@ -33,7 +33,10 @@ Your account/password fields and auto-login toggle live here, along with a live-
 this README and the changelog — so you can check what changed without leaving the app or digging
 through folders. Auto-login types your credentials directly (bypassing your keyboard layout, so a
 non-English layout can't garble your password) and waits for the client to actually finish
-loading before it types, instead of guessing a fixed delay.
+loading before it types, instead of guessing a fixed delay. The Realmlist label carries a live
+status dot — green when the auth server accepts a connection, red when a real host refuses or
+times out, gray when the address doesn't even resolve — and the field itself remembers every
+realm you've actually connected to, offered back as a history dropdown.
 
 ### Tweaks
 
@@ -88,6 +91,8 @@ at once.
 
 A running, live log of everything the launcher does — patching, injection, downloads, addon
 installs — for when something doesn't go as expected and you want to see exactly what happened.
+Entries are color-coded by severity, and Clear, Copy, and Open Folder actions are right there on
+the tab.
 
 ## Requirements
 
@@ -118,7 +123,7 @@ own code.
 
 ## Project status
 
-Version 1.9.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
+Version 1.10.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
 ## License

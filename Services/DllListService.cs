@@ -56,15 +56,26 @@ public sealed class DllListService
             return result;
         }
 
-        foreach (string raw in File.ReadAllLines(path))
+        try
         {
-            string line = raw.Trim();
-            if (line.Length == 0 || line.StartsWith('#'))
+            foreach (string raw in File.ReadAllLines(path))
             {
-                continue;
-            }
+                string line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith('#'))
+                {
+                    continue;
+                }
 
-            result.Add(line);
+                result.Add(line);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Best-effort, like every other small config-file read here — this runs from
+            // MainWindow's own constructor (via RefreshDllList) with no enclosing try/catch, so a
+            // locked file or transient permissions error must degrade to "no entries" rather than
+            // throwing and taking down the whole app before the window even shows.
+            _log.Warn($"Could not read {DllsFileName}: {ex.Message}");
         }
 
         return result;
@@ -115,7 +126,18 @@ public sealed class DllListService
         var tracked = new HashSet<string>(ReadActiveNames(wowDir), StringComparer.OrdinalIgnoreCase);
         var ignoredSet = new HashSet<string>(ignored ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
 
-        foreach (string path in Directory.EnumerateFiles(wowDir, "*.dll", SearchOption.TopDirectoryOnly))
+        List<string> files;
+        try
+        {
+            files = Directory.EnumerateFiles(wowDir, "*.dll", SearchOption.TopDirectoryOnly).ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"Could not scan {wowDir} for DLLs: {ex.Message}");
+            return result;
+        }
+
+        foreach (string path in files)
         {
             string name = Path.GetFileName(path);
             if (BaseGameDlls.Contains(name) || LauncherOwnDlls.Contains(name) ||
@@ -143,17 +165,26 @@ public sealed class DllListService
         // Preserve a leading run of comment/blank lines from the existing file as a header.
         if (File.Exists(path))
         {
-            foreach (string raw in File.ReadAllLines(path))
+            try
             {
-                string line = raw.Trim();
-                if (line.Length == 0 || line.StartsWith('#'))
+                foreach (string raw in File.ReadAllLines(path))
                 {
-                    lines.Add(raw);
+                    string line = raw.Trim();
+                    if (line.Length == 0 || line.StartsWith('#'))
+                    {
+                        lines.Add(raw);
+                    }
+                    else
+                    {
+                        break;
+                    }
                 }
-                else
-                {
-                    break;
-                }
+            }
+            catch (Exception ex)
+            {
+                // Best-effort — losing the header comment on a transient read failure is harmless;
+                // the entries below are what actually matters and still get written.
+                _log.Warn($"Could not read the existing {DllsFileName} header: {ex.Message}");
             }
         }
         else
@@ -167,7 +198,7 @@ public sealed class DllListService
         }
 
         lines.AddRange(names);
-        File.WriteAllLines(path, lines);
+        AtomicFile.WriteAllText(path, string.Join("\r\n", lines) + "\r\n");
         _log.Info($"Wrote {names.Count} DLL entr{(names.Count == 1 ? "y" : "ies")} to {DllsFileName}.");
     }
 
@@ -183,13 +214,20 @@ public sealed class DllListService
             return result;
         }
 
-        foreach (string raw in File.ReadAllLines(path))
+        try
         {
-            string line = raw.Trim();
-            if (line.Length != 0)
+            foreach (string raw in File.ReadAllLines(path))
             {
-                result.Add(line);
+                string line = raw.Trim();
+                if (line.Length != 0)
+                {
+                    result.Add(line);
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"Could not read {CacheFileName}: {ex.Message}");
         }
 
         return result;
@@ -238,7 +276,7 @@ public sealed class DllListService
             }
             else
             {
-                File.WriteAllLines(path, resolved);
+                AtomicFile.WriteAllText(path, string.Join("\r\n", resolved) + "\r\n");
             }
         }
         catch (Exception ex)

@@ -27,6 +27,7 @@
   <Window.Resources>
     <BooleanToVisibilityConverter x:Key="BoolToVis"/>
     <svc:ScrollableToVisibilityConverter x:Key="ScrollableToVis"/>
+    <svc:LogLevelToBrushConverter x:Key="LogLevelToBrush"/>
 
     <!-- The app-wide TextBlock/CheckBox/TextBox/PasswordBox/ListBox/Button/window-control-button
          styles (App.xaml) cover this window too — no local overrides here. -->
@@ -95,6 +96,21 @@
         <TextBlock Text="{Binding Summary}" Style="{StaticResource CaptionText}"
                    Margin="10,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
       </StackPanel>
+    </DataTemplate>
+
+    <!-- LogList row: timestamp always muted regardless of severity; the "[LEVEL] message" portion
+         takes the severity color via LogLevelToBrushConverter (Debug muted, Info normal body color,
+         Warn amber, Error red) — inherited from the TextBlock's own Foreground by every Run below
+         that doesn't set its own, except the timestamp Run which overrides it. -->
+    <DataTemplate x:Key="LogRowTemplate">
+      <TextBlock FontFamily="Consolas" FontSize="12" TextWrapping="NoWrap" Margin="0,1"
+                 Foreground="{Binding Level, Converter={StaticResource LogLevelToBrush}}">
+        <Run Text="{Binding Timestamp, StringFormat=HH:mm:ss, Mode=OneTime}" Foreground="#6A6A72"/>
+        <Run Text="  ["/>
+        <Run Text="{Binding LevelDisplay, Mode=OneTime}" FontWeight="SemiBold"/>
+        <Run Text="]  "/>
+        <Run Text="{Binding Message, Mode=OneTime}"/>
+      </TextBlock>
     </DataTemplate>
   </Window.Resources>
 
@@ -173,8 +189,16 @@
     </Border>
 
     <!-- Body -->
-    <TabControl x:Name="MainTabs" Style="{StaticResource HeaderlessTabControl}"
-                    Background="#1B1B1F" BorderThickness="0" Padding="0" SelectedIndex="0">
+    <Grid Background="#1B1B1F">
+      <!-- One piece of background art, picked at random per launch (see MainWindow.xaml.cs), sitting
+           behind every tab's own content. Dimmed low-opacity so it reads as a faint texture rather
+           than competing with foreground text — shows through wherever a tab's own content has gaps
+           (e.g. an unstyled ScrollViewer), since the TabControl's own Background has no effect anymore
+           now that HeaderlessTabControl replaces its template with a bare ContentPresenter. -->
+      <Image x:Name="BodyBackgroundImage" Stretch="UniformToFill" Opacity="0.12" IsHitTestVisible="False"/>
+
+      <TabControl x:Name="MainTabs" Style="{StaticResource HeaderlessTabControl}"
+                      Background="Transparent" BorderThickness="0" Padding="0" SelectedIndex="0">
 
       <!-- 0: Home (Login & Game) -->
       <TabItem d:IsHidden="True">
@@ -226,10 +250,17 @@
 
             <DockPanel Grid.Row="0" Margin="0,0,0,20" LastChildFill="False">
               <TextBlock DockPanel.Dock="Left" Style="{StaticResource Heading2Text}" Text="Login"/>
-              <TextBlock DockPanel.Dock="Right" x:Name="RealmlistLabel" Style="{StaticResource CaptionText}"
+              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Cursor="Hand"
+                          MouseLeftButtonUp="OnRealmlistLabelClicked">
+                <!-- Realm status dot: periodically TCP-probed against the realmlist host's auth port
+                     (see RealmStatusChecker) — green when it accepts a connection, red when it
+                     doesn't, gray while no realmlist is set or the first check hasn't landed yet. -->
+                <Ellipse x:Name="RealmlistStatusDot" Width="10" Height="10" Fill="#6A6A72"
+                         VerticalAlignment="Center" Margin="0,0,6,0" ToolTip="Realm status unknown"/>
+                <TextBlock x:Name="RealmlistLabel" Style="{StaticResource CaptionText}"
                                        Text="Realmlist: (not set)"
-                                       VerticalAlignment="Center" Cursor="Hand" TextDecorations="Underline"
-                                       MouseLeftButtonUp="OnRealmlistLabelClicked"/>
+                                       VerticalAlignment="Center" TextDecorations="Underline"/>
+              </StackPanel>
             </DockPanel>
 
             <StackPanel Grid.Row="1" MaxWidth="420" HorizontalAlignment="Left">
@@ -258,6 +289,17 @@
               <TextBlock Style="{StaticResource MicroText}"
                                      Text="1. Signature Removal → 2. VanillaTweaks. Toggling or adjusting any tweak rebuilds WoW.exe from the untouched backup, as soon as you change it."
                                      TextWrapping="Wrap" Margin="0,0,0,8"/>
+
+              <!-- Shown only while Signature Removal is off AND one or more custom MPQ patches are
+                   still active — that combination isn't a degraded experience, it's an unplayable one:
+                   WoW's own file-signature check (left intact without this patch) rejects the unsigned
+                   MPQ content and refuses to launch, reporting a corrupted Data folder. -->
+              <Border x:Name="SignatureMpqWarningBanner" Visibility="Collapsed"
+                      Background="#3A2A10" BorderBrush="#E0A030" BorderThickness="1" CornerRadius="4"
+                      Padding="10,8" Margin="0,0,0,10">
+                <TextBlock x:Name="SignatureMpqWarningText" Foreground="#F0C878" FontSize="12" TextWrapping="Wrap"/>
+              </Border>
+
               <StackPanel x:Name="PatchesPanel"/>
             </StackPanel>
           </Border>
@@ -359,6 +401,15 @@
                 <Button Style="{StaticResource IconButtonStyle}" Content="&#xE711;" Click="OnDeselectAllMpq" Margin="8,0,0,0"
                         ToolTip="Disable all patches"/>
               </StackPanel>
+
+              <!-- Mirrors SignatureMpqWarningBanner on the Tweaks tab — shown whenever Signature
+                   Removal is off while a patch below is still active, so the warning reaches the user
+                   regardless of which of the two tabs they happen to be looking at. -->
+              <Border x:Name="MpqSignatureWarningBanner" Visibility="Collapsed"
+                      Background="#3A2A10" BorderBrush="#E0A030" BorderThickness="1" CornerRadius="4"
+                      Padding="10,8" Margin="0,8,0,0">
+                <TextBlock x:Name="MpqSignatureWarningText" Foreground="#F0C878" FontSize="12" TextWrapping="Wrap"/>
+              </Border>
             </StackPanel>
           </Border>
 
@@ -542,15 +593,18 @@
                                      Text="Re-downloads and reinstalls the full client from the source URL below, overwriting any file that differs. There is no per-file update list for this client, so this always refreshes the whole install."/>
 
               <TextBlock Style="{StaticResource Heading3Text}" Text="Realmlist"/>
-              <TextBlock Style="{StaticResource MicroText}" Text="(any private vanilla server, e.g. logon.myserver.com)" Margin="0,0,0,4"/>
-              <TextBox x:Name="RealmlistBox" Margin="0,0,0,20"/>
+              <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,4"
+                         Text="Any private vanilla server, e.g. logon.myserver.com — pick a previously used one from the dropdown, or type a new address."/>
+              <ComboBox x:Name="RealmlistBox" Margin="0,0,0,20" IsEditable="True" IsTextSearchEnabled="False"
+                        SelectionChanged="OnRealmlistHistorySelected"/>
 
               <TextBlock Style="{StaticResource Heading3Text}" Text="Client download URL"/>
               <TextBlock Style="{StaticResource MicroText}" Text="(advanced — override for another server's client zip)" Margin="0,0,0,4"/>
               <TextBox x:Name="ClientUrlBox" Margin="0,0,0,20"/>
 
               <TextBlock Style="{StaticResource Heading3Text}" Text="Login delay"/>
-              <TextBlock Style="{StaticResource MicroText}" Text="Delay of the auto-login after the game window appears. (ms)" Margin="0,0,0,4"/>
+              <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,4"
+                         Text="Fallback only (ms): the launcher normally detects when the client has finished loading on its own and logs in immediately. This delay is used only if that detection can't tell in time." TextWrapping="Wrap"/>
               <TextBox x:Name="DelayBox" Width="130" HorizontalAlignment="Left" Margin="0,0,0,20"/>
 
               <TextBlock Style="{StaticResource Heading3Text}" Text="Ignored DLLs"/>
@@ -569,14 +623,60 @@
 
       <!-- 6: Log -->
       <TabItem>
-        <Border Background="#101014" Margin="8">
-          <TextBox x:Name="LogBox" IsReadOnly="True" Background="Transparent" Foreground="#C8C8D0"
-                             BorderThickness="0" FontFamily="Consolas" FontSize="12"
-                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                             TextWrapping="NoWrap"/>
-        </Border>
+        <!-- Full-width like DLLs (log lines/stack traces need real width) but structured like MPQ
+             Patches/Addons: a pinned header above a separately-scrollable list, sharing Column 0's
+             width between both rows so the two card halves' edges always line up, with a standalone
+             ScrollBar in Column 1 instead of LogList's own (kept hidden — see
+             OnLogListPreviewMouseWheel below for why that's necessary). -->
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+
+          <!-- Pinned top of the card: title, description, actions. Never scrolls. -->
+          <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource WideCardTopStyle}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource Heading3Text}" Text="Application Log"/>
+              <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,8"
+                         Text="Live events as the launcher runs. Clear only hides this view — the file under Logs\ on disk is never touched."/>
+              <StackPanel Orientation="Horizontal">
+                <Button Style="{StaticResource IconButtonStyle}" Content="&#xE74D;" Click="OnClearLog"
+                        ToolTip="Clear this view (does not delete the log file)"/>
+                <Button Style="{StaticResource IconButtonStyle}" Content="&#xE8C8;" Click="OnCopyLog" Margin="8,0,0,0"
+                        ToolTip="Copy the visible log to the clipboard"/>
+                <Button Style="{StaticResource IconButtonStyle}" Content="&#xE838;" Click="OnOpenLogFolder" Margin="8,0,0,0"
+                        ToolTip="Open the log file's folder"/>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <!-- Bottom of the card: the log list. Same hidden-inner-scrollbar / standalone-outer-
+               ScrollBar pattern as MPQ Patches/Addons — see their own comments for the full rationale. -->
+          <ScrollViewer x:Name="LogScrollViewer" Grid.Row="1" Grid.Column="0" VerticalScrollBarVisibility="Hidden">
+            <Border Style="{StaticResource WideCardBottomStyle}">
+              <ListBox x:Name="LogList" Background="Transparent" BorderThickness="0"
+                       ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                       ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                       ItemTemplate="{StaticResource LogRowTemplate}"
+                       PreviewMouseWheel="OnLogListPreviewMouseWheel"/>
+            </Border>
+          </ScrollViewer>
+          <ScrollBar Grid.Row="1" Grid.Column="1" Orientation="Vertical" Margin="0,0,0,16"
+                     Value="{Binding ElementName=LogScrollViewer, Path=VerticalOffset, Mode=OneWay}"
+                     Maximum="{Binding ElementName=LogScrollViewer, Path=ScrollableHeight}"
+                     ViewportSize="{Binding ElementName=LogScrollViewer, Path=ViewportHeight}"
+                     LargeChange="{Binding ElementName=LogScrollViewer, Path=ViewportHeight}"
+                     Visibility="{Binding ElementName=LogScrollViewer, Path=ScrollableHeight, Converter={StaticResource ScrollableToVis}}"
+                     Scroll="OnLogScrollBarScroll"/>
+        </Grid>
       </TabItem>
-    </TabControl>
+      </TabControl>
+    </Grid>
   </DockPanel>
 
     <!-- Fog overlay: shown while any of our own dialogs is open (ShowModal below), so the launcher

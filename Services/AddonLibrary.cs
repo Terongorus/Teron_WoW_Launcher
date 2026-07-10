@@ -62,7 +62,7 @@ public sealed class AddonLibrary
         try
         {
             AppPaths.EnsureDataRoot();
-            File.WriteAllText(AddonPaths.AddonsFilePath, JsonSerializer.Serialize(_addons, JsonOptions));
+            AtomicFile.WriteAllText(AddonPaths.AddonsFilePath, JsonSerializer.Serialize(_addons, JsonOptions));
         }
         catch (Exception ex)
         {
@@ -79,7 +79,7 @@ public sealed class AddonLibrary
         AddonDownload download = await source.DownloadAsync(input, Http, ct);
         try
         {
-            List<InstalledFolderInfo> folders = _installer.InstallFromArchive(download.ArchivePath, wowDir);
+            List<InstalledFolderInfo> folders = _installer.InstallFromDirectory(download.ContentDir, wowDir);
             InstalledFolderInfo primary =
                 folders.FirstOrDefault(f => string.Equals(f.Folder, download.SuggestedName, StringComparison.OrdinalIgnoreCase))
                 ?? folders[0];
@@ -89,20 +89,41 @@ public sealed class AddonLibrary
             // versions work uniformly across every source, not just manually-adopted addons.
             string name = !string.IsNullOrWhiteSpace(primary.Title) ? primary.Title! : primary.Folder;
 
-            InstalledAddon? existing = _addons.FirstOrDefault(a =>
-                string.Equals(a.SourceRef, download.SourceRef, StringComparison.OrdinalIgnoreCase));
+            // Matched by SourceRef first (the normal case — re-adding/updating the same URL), but
+            // also by folder overlap: a folder that's already tracked under one or more OTHER entries
+            // (e.g. each adopted as its own Manual addon from a pre-existing local install, SourceRef
+            // null — a repo with several on-demand-loaded modules commonly ends up this way) must all
+            // collapse into the single entry this install produces, since installing always overwrites
+            // those folders in place. Every matching entry beyond the one kept is removed outright —
+            // otherwise the extras become permanently orphaned rows still "claiming" folders that this
+            // entry now owns, which is exactly how two addons.json rows end up pointing at the one real
+            // AddOns folder.
+            var newFolders = folders.Select(f => f.Folder).ToList();
+            List<InstalledAddon> matches = _addons.Where(a =>
+                string.Equals(a.SourceRef, download.SourceRef, StringComparison.OrdinalIgnoreCase)
+                || a.Folders.Intersect(newFolders, StringComparer.OrdinalIgnoreCase).Any())
+                .ToList();
 
-            InstalledAddon addon = existing ?? new InstalledAddon { Name = name };
+            InstalledAddon addon =
+                matches.FirstOrDefault(a => string.Equals(a.SourceRef, download.SourceRef, StringComparison.OrdinalIgnoreCase))
+                ?? matches.FirstOrDefault()
+                ?? new InstalledAddon { Name = name };
+
             addon.Name = name;
             addon.SourceKind = download.Kind;
             addon.SourceRef = download.SourceRef;
             addon.Version = primary.Version;
             addon.RemoteVersionSignature = download.RemoteVersionSignature;
-            addon.Folders = folders.Select(f => f.Folder).ToList();
+            addon.Folders = newFolders;
             addon.InstalledUtc = DateTime.UtcNow;
             addon.HasUpdateAvailable = false; // just (re)installed at the latest known signature
 
-            if (existing is null)
+            foreach (InstalledAddon duplicate in matches.Where(a => !ReferenceEquals(a, addon)))
+            {
+                _addons.Remove(duplicate);
+            }
+
+            if (!matches.Contains(addon))
             {
                 _addons.Add(addon);
             }
@@ -113,7 +134,7 @@ public sealed class AddonLibrary
         }
         finally
         {
-            try { File.Delete(download.ArchivePath); } catch { /* temp cleanup best-effort */ }
+            try { DirectoryHelper.DeleteRecursive(download.ContentDir); } catch { /* temp cleanup best-effort */ }
         }
     }
 
@@ -238,6 +259,8 @@ public sealed class AddonLibrary
     /// </summary>
     public async Task CheckForUpdatesAsync(CancellationToken ct = default)
     {
+        bool migrated = false;
+
         foreach (InstalledAddon addon in _addons)
         {
             if (addon.IgnoreUpdates || addon.SourceKind == AddonSourceKind.Manual || string.IsNullOrWhiteSpace(addon.SourceRef))
@@ -250,9 +273,27 @@ public sealed class AddonLibrary
             {
                 IAddonSource source = _resolver.Resolve(addon.SourceRef);
                 string? latest = await source.GetLatestVersionSignatureAsync(addon.SourceRef, Http, ct);
-                addon.HasUpdateAvailable = latest is not null
-                    && !string.IsNullOrEmpty(addon.RemoteVersionSignature)
-                    && !string.Equals(latest, addon.RemoteVersionSignature, StringComparison.Ordinal);
+                if (latest is null)
+                {
+                    addon.HasUpdateAvailable = false;
+                    continue;
+                }
+
+                if (!LooksLikeCommitSha(addon.RemoteVersionSignature))
+                {
+                    // One-time transition from the pre-git-clone signature format (a release tag, a
+                    // "branch:name[@sha]" string, or simply null from an addon added before this
+                    // field even existed) to a plain commit sha — adopt it silently as the new
+                    // baseline instead of flagging every already-tracked addon as updatable the
+                    // moment the signature format itself changes, with nothing about the addon
+                    // actually different. Normal sha-vs-sha comparison takes over from here on.
+                    addon.RemoteVersionSignature = latest;
+                    addon.HasUpdateAvailable = false;
+                    migrated = true;
+                    continue;
+                }
+
+                addon.HasUpdateAvailable = !string.Equals(latest, addon.RemoteVersionSignature, StringComparison.Ordinal);
             }
             catch (Exception ex)
             {
@@ -260,9 +301,16 @@ public sealed class AddonLibrary
                 addon.HasUpdateAvailable = false;
             }
         }
+
+        if (migrated)
+        {
+            Save();
+        }
     }
 
-    /// <summary>Delete an addon's installed folders and stop tracking it.</summary>
+    private static bool LooksLikeCommitSha(string? s) => s is { Length: 40 } && s.All(Uri.IsHexDigit);
+
+    /// <summary>Delete an addon's installed folders, its cached git clone (if any), and stop tracking it.</summary>
     public void Remove(InstalledAddon addon, string wowDir)
     {
         string addonsDir = AddonPaths.AddOnsDir(wowDir);
@@ -273,6 +321,16 @@ public sealed class AddonLibrary
             {
                 try { DirectoryHelper.DeleteRecursive(dir); }
                 catch (Exception ex) { _log.Warn($"Could not delete {dir}: {ex.Message}"); }
+            }
+        }
+
+        if (addon.SourceKind == AddonSourceKind.GitHub && TryParseGitHubRepo(addon.SourceRef, out string owner, out string repo))
+        {
+            string cacheDir = AddonPaths.AddonRepoCacheDir(owner, repo);
+            if (Directory.Exists(cacheDir))
+            {
+                try { DirectoryHelper.DeleteRecursive(cacheDir); }
+                catch (Exception ex) { _log.Warn($"Could not delete cached repo clone {cacheDir}: {ex.Message}"); }
             }
         }
 

@@ -16,6 +16,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Markdig.Wpf;
 using Microsoft.Win32;
@@ -35,7 +36,9 @@ public partial class MainWindow : Window
     private readonly DllListService _dlls = new();
     private readonly MpqPatchService _mpq = new();
     private readonly RealmlistService _realmlist = new();
+    private readonly RealmStatusChecker _realmStatus = new();
     private readonly GameInstallService _install = new();
+    private readonly GameProcessService _processCheck = new();
     private readonly AddonLibrary _addons = new();
 
     private readonly List<PatchControl> _patchControls = new();
@@ -43,13 +46,21 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<DllInfo> _detectedDllItems = new();
     private readonly ObservableCollection<string> _ignoredDllItems = new();
     private readonly ObservableCollection<InstalledAddon> _addonItems = new();
+    private readonly ObservableCollection<LogEntry> _logItems = new();
+    private readonly ObservableCollection<string> _realmlistHistoryItems = new();
 
     private readonly DispatcherTimer _patchApplyTimer = new() { Interval = TimeSpan.FromMilliseconds(600) };
     private readonly DispatcherTimer _settingsSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
+    private readonly DispatcherTimer _realmStatusTimer = new() { Interval = TimeSpan.FromSeconds(60) };
+    private readonly DispatcherTimer _gameRunningTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+    private int _realmStatusCheckInFlight;
     private bool _loading;
     private bool _applyingPatches;
     private bool _savingSettings;
     private bool _addonBusy;
+    private bool _launchOperationBusy;
+    private bool _wowAlreadyRunning;
+    private int? _launchedGameProcessId;
 
     // Last values a settings-save actually acted on, so retyping the same folder/URL/realmlist
     // doesn't re-trigger the heavier side effects (folder rescans, a network update check) every tick.
@@ -66,6 +77,9 @@ public partial class MainWindow : Window
     private static readonly Brush PlayColor = new SolidColorBrush(Color.FromRgb(0x3B, 0x7D, 0x3B));
     private static readonly Brush InstallColor = new SolidColorBrush(Color.FromRgb(0x2E, 0x6D, 0xA4));
     private static readonly Brush UpdateColor = new SolidColorBrush(Color.FromRgb(0xC9, 0x92, 0x2B));
+    private static readonly Brush RealmOnlineBrush = new SolidColorBrush(Color.FromRgb(0x3B, 0x7D, 0x3B));
+    private static readonly Brush RealmOfflineBrush = new SolidColorBrush(Color.FromRgb(0xB3, 0x3A, 0x3A));
+    private static readonly Brush RealmUnknownBrush = new SolidColorBrush(Color.FromRgb(0x6A, 0x6A, 0x72));
 
     // "HEAD" resolves to whichever branch GitHub reports as the repo's default, so this always
     // reflects what's actually published there rather than a hardcoded branch name.
@@ -94,6 +108,7 @@ public partial class MainWindow : Window
         Title = AppInfo.DisplayNameWithVersion;
         HeaderText.Text = AppInfo.DisplayName;
         VersionLabel.Text = $"v{AppInfo.Version}";
+        LoadRandomBodyBackground();
         WindowChromeHelper.FixMaximizedBounds(this);
         StateChanged += OnWindowStateChanged;
         Closing += OnWindowClosing;
@@ -104,10 +119,17 @@ public partial class MainWindow : Window
         _log.MessageLogged += OnMessageLogged;
         _patchApplyTimer.Tick += OnPatchApplyTick;
         _settingsSaveTimer.Tick += OnSettingsSaveTick;
+        _realmStatusTimer.Tick += OnRealmStatusTick;
+        _realmStatusTimer.Start();
+        _gameRunningTimer.Tick += OnGameRunningTick;
+        _gameRunningTimer.Start();
+        OnGameRunningTick(null, EventArgs.Empty); // reflect an already-running game immediately, don't wait for the first tick
 
         DllList.ItemsSource = _dllItems;
         DetectedDllList.ItemsSource = _detectedDllItems;
         IgnoredDllList.ItemsSource = _ignoredDllItems;
+        LogList.ItemsSource = _logItems;
+        RealmlistBox.ItemsSource = _realmlistHistoryItems;
 
         // Save on any change instead of a Save button — CollectSettingsFromUi() validates each field
         // (bad numbers/URLs keep the last good value) before anything is persisted.
@@ -118,7 +140,12 @@ public partial class MainWindow : Window
         SavePasswordCheck.Checked += (_, _) => ScheduleSettingsSave();
         SavePasswordCheck.Unchecked += (_, _) => ScheduleSettingsSave();
         GameFolderBox.TextChanged += (_, _) => ScheduleSettingsSave();
-        RealmlistBox.TextChanged += (_, _) => ScheduleSettingsSave();
+        // ComboBox has no TextChanged event of its own — IsEditable routes typed input through its
+        // internal PART_EditableTextBox, whose TextChanged bubbles up as the TextBoxBase attached
+        // event, which AddHandler picks up here the same way XAML's "TextBoxBase.TextChanged=..."
+        // syntax would.
+        RealmlistBox.AddHandler(TextBoxBase.TextChangedEvent, new TextChangedEventHandler((_, _) => ScheduleSettingsSave()));
+        RealmlistBox.LostFocus += (_, _) => UpdateRealmlistLabel();
         ClientUrlBox.TextChanged += (_, _) => ScheduleSettingsSave();
         DelayBox.TextChanged += (_, _) => ScheduleSettingsSave();
 
@@ -141,6 +168,10 @@ public partial class MainWindow : Window
 
         _ = RefreshPlayButtonStateAsync();
         _ = LoadDocsFromGitHubAsync();
+
+        // Deferred to Loaded rather than run here directly: showing a modal ConfirmDialog needs its
+        // Owner (this window) to have already been shown, which hasn't happened yet mid-constructor.
+        Loaded += (_, _) => _ = VerifyPristineBackupIntegrityAsync();
     }
 
     // ---------------- Custom title bar ----------------
@@ -157,6 +188,16 @@ public partial class MainWindow : Window
         bool maximized = WindowState == WindowState.Maximized;
         MaximizeRestoreButton.Content = maximized ? "" : ""; // ChromeRestore / ChromeMaximize
         MaximizeRestoreButton.ToolTip = maximized ? "Restore" : "Maximize";
+    }
+
+    /// <summary>Picks one of the bundled background paintings at random for this launch (see Artwork/, embedded via the csproj).</summary>
+    private const int BodyBackgroundImageCount = 11;
+
+    private void LoadRandomBodyBackground()
+    {
+        int pick = Random.Shared.Next(1, BodyBackgroundImageCount + 1);
+        var uri = new Uri($"pack://application:,,,/Artwork/background_{pick}.jpg", UriKind.Absolute);
+        BodyBackgroundImage.Source = new BitmapImage(uri);
     }
 
     /// <summary>Applies the saved size/position/state, if any and still sane, before the window is shown.</summary>
@@ -320,7 +361,14 @@ public partial class MainWindow : Window
     {
         SelectTab(5); // Settings
         RealmlistBox.Focus();
-        RealmlistBox.SelectAll();
+
+        // ComboBox has no SelectAll() of its own; reach into its editable-mode template part instead.
+        RealmlistBox.ApplyTemplate();
+        if (RealmlistBox.Template.FindName("PART_EditableTextBox", RealmlistBox) is TextBox editableText)
+        {
+            editableText.SelectAll();
+        }
+
         FlashHighlight(RealmlistBox);
     }
 
@@ -357,7 +405,7 @@ public partial class MainWindow : Window
                 : _settings.Current.EnabledPatchIds.Contains(patch.Id);
 
             var box = new CheckBox { Content = patch.Name, IsChecked = isChecked };
-            box.Click += (_, _) => SchedulePatchApply();
+            box.Click += (_, _) => { SchedulePatchApply(); RefreshSignatureMpqWarning(); };
             PatchesPanel.Children.Add(box);
             PatchesPanel.Children.Add(new TextBlock
             {
@@ -464,6 +512,35 @@ public partial class MainWindow : Window
         {
             PatchesPanel.Children.Add(new TextBlock { Text = "No executable tweaks available yet.", Foreground = MutedBrush, FontSize = BodyFontSize });
         }
+
+        RefreshSignatureMpqWarning();
+    }
+
+    /// <summary>
+    /// Signature Removal disables the file-integrity check that would otherwise reject custom MPQ
+    /// patches — without it, WoW refuses to launch at all while one is active, reporting a corrupted
+    /// Data folder rather than just ignoring the patch. Shown on both the Tweaks and MPQ Patches tabs
+    /// (whichever the user happens to be on) whenever that combination is currently in effect.
+    /// </summary>
+    private void RefreshSignatureMpqWarning()
+    {
+        bool signatureRemovalEnabled = _settings.Current.EnabledPatchIds.Contains("signature-removal");
+        int activeMpqCount = _mpq.Scan(CurrentWowDir()).Count(p => p.Enabled);
+        bool atRisk = !signatureRemovalEnabled && activeMpqCount > 0;
+
+        SignatureMpqWarningBanner.Visibility = atRisk ? Visibility.Visible : Visibility.Collapsed;
+        MpqSignatureWarningBanner.Visibility = atRisk ? Visibility.Visible : Visibility.Collapsed;
+
+        if (atRisk)
+        {
+            string patchWord = activeMpqCount == 1 ? "patch" : "patches";
+            SignatureMpqWarningText.Text =
+                $"⚠ {activeMpqCount} active custom MPQ {patchWord} — with Signature Removal off, WoW will refuse " +
+                "to launch and report a corrupted Data folder instead of just ignoring them.";
+            MpqSignatureWarningText.Text =
+                "⚠ Signature Removal is disabled (Tweaks tab). WoW will refuse to launch while any patch above " +
+                "is active, reporting a corrupted Data folder — enable it or disable these patches first.";
+        }
     }
 
     private static string FormatNumericValue(double value, PatchParameter p)
@@ -516,7 +593,18 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SaveDllList() => _dlls.WriteActiveNames(CurrentWowDir(), _dllItems.Select(d => d.Name).ToList());
+    private void SaveDllList()
+    {
+        try
+        {
+            _dlls.WriteActiveNames(CurrentWowDir(), _dllItems.Select(d => d.Name).ToList());
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Failed to save dlls.txt.", ex);
+            UpdateStatus("Failed to save the DLL list — see the Log tab.");
+        }
+    }
 
     private void OnAddDll(object sender, RoutedEventArgs e)
     {
@@ -688,7 +776,6 @@ public partial class MainWindow : Window
                 FontSize = BodyFontSize,
                 Margin = new Thickness(0, 6, 0, 0),
             });
-            return;
         }
 
         foreach (MpqPatch patch in patches)
@@ -705,7 +792,7 @@ public partial class MainWindow : Window
             };
             remove.Click += (_, _) =>
             {
-                _mpq.Remove(wowDir, patch);
+                RunMpqOperation(() => _mpq.Remove(wowDir, patch), $"remove patch {patch.Letter}");
                 RefreshMpqList();
             };
             DockPanel.SetDock(remove, Dock.Right);
@@ -720,13 +807,15 @@ public partial class MainWindow : Window
             };
             check.Click += (_, _) =>
             {
-                _mpq.SetEnabled(wowDir, patch, check.IsChecked == true);
+                RunMpqOperation(() => _mpq.SetEnabled(wowDir, patch, check.IsChecked == true), $"toggle patch {patch.Letter}");
                 RefreshMpqList();
             };
             row.Children.Add(check);
 
             MpqPanel.Children.Add(row);
         }
+
+        RefreshSignatureMpqWarning();
     }
 
     private void OnAddMpq(object sender, RoutedEventArgs e)
@@ -741,7 +830,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _mpq.Add(CurrentWowDir(), dialog.FileName);
+        RunMpqOperation(() => _mpq.Add(CurrentWowDir(), dialog.FileName), "add the MPQ patch");
         RefreshMpqList();
     }
 
@@ -762,10 +851,28 @@ public partial class MainWindow : Window
         string wowDir = CurrentWowDir();
         foreach (MpqPatch patch in _mpq.Scan(wowDir))
         {
-            _mpq.SetEnabled(wowDir, patch, enabled);
+            RunMpqOperation(() => _mpq.SetEnabled(wowDir, patch, enabled), $"toggle patch {patch.Letter}");
         }
 
         RefreshMpqList();
+    }
+
+    /// <summary>
+    /// Runs an MPQ file operation (rename/copy/delete under Data\), reporting failure instead of
+    /// letting it throw unhandled from a button click — the Data folder can be locked by a running
+    /// game or antivirus scan at the exact moment the user clicks.
+    /// </summary>
+    private void RunMpqOperation(Action action, string failureContext)
+    {
+        try
+        {
+            action();
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to {failureContext}.", ex);
+            UpdateStatus($"Failed to {failureContext} — see the Log tab.");
+        }
     }
 
     // ---------------- Addons tab ----------------
@@ -897,7 +1004,8 @@ public partial class MainWindow : Window
         try
         {
             string markdown = await _addons.GetDetailsMarkdownAsync(addon, CurrentWowDir(), CancellationToken.None);
-            var dialog = new AddonDetailsDialog(title, markdown, addon.IgnoreUpdates);
+            string? repoUrl = addon.SourceKind == AddonSourceKind.GitHub ? addon.SourceRef : null;
+            var dialog = new AddonDetailsDialog(title, markdown, addon.IgnoreUpdates, repoUrl);
             ShowModal(dialog);
 
             if (dialog.IgnoreUpdates != addon.IgnoreUpdates)
@@ -911,10 +1019,16 @@ public partial class MainWindow : Window
                 _addons.Save();
                 RefreshAddonList();
             }
-        }
-        finally
-        {
+
             UpdateStatus("Ready.");
+        }
+        catch (Exception ex)
+        {
+            // Defense in depth: GetDetailsMarkdownAsync's own sub-paths already catch their own
+            // errors, but this is an async void handler — anything that slips through uncaught here
+            // would crash the whole app, not just fail this one dialog.
+            _log.Error($"Could not load details for '{title}'.", ex);
+            UpdateStatus("Could not load addon details — see the Log tab.");
         }
     }
 
@@ -1012,6 +1126,7 @@ public partial class MainWindow : Window
         PasswordBoxInput.Password = s.SavePassword ? _settings.GetPassword() : string.Empty;
         DelayBox.Text = s.LoginDelayMs.ToString(CultureInfo.InvariantCulture);
         RealmlistBox.Text = s.Realmlist;
+        RefreshRealmlistHistoryItems();
         ClientUrlBox.Text = string.IsNullOrWhiteSpace(s.ClientDownloadUrl)
             ? GameInstallService.DefaultClientUrl
             : s.ClientDownloadUrl;
@@ -1115,11 +1230,15 @@ public partial class MainWindow : Window
         {
             try
             {
-                _realmlist.Write(wowDir, realmlist);
+                if (!_realmlist.Write(wowDir, realmlist))
+                {
+                    UpdateStatus("Warning: realmlist.wtf may not have saved correctly — see the Log tab.");
+                }
             }
             catch (Exception ex)
             {
                 _log.Error("Failed to write realmlist.wtf.", ex);
+                UpdateStatus("Failed to write realmlist.wtf — see the Log tab.");
             }
         }
 
@@ -1161,6 +1280,131 @@ public partial class MainWindow : Window
     {
         string realm = RealmlistBox.Text?.Trim() ?? string.Empty;
         RealmlistLabel.Text = $"Realmlist: {(string.IsNullOrEmpty(realm) ? "(not set)" : realm)}";
+        _ = RefreshRealmStatusAsync();
+    }
+
+    private async void OnRealmStatusTick(object? sender, EventArgs e) => await RefreshRealmStatusAsync();
+
+    /// <summary>
+    /// Probes the current realmlist's auth port and colors <see cref="RealmlistStatusDot"/> accordingly.
+    /// Guarded against overlap: if a slow/timing-out check from the previous timer tick is still in
+    /// flight, this tick is skipped rather than piling up a second concurrent probe.
+    /// </summary>
+    private async Task RefreshRealmStatusAsync()
+    {
+        if (Interlocked.CompareExchange(ref _realmStatusCheckInFlight, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            string realm = RealmlistBox.Text?.Trim() ?? string.Empty;
+            RealmStatus status = await _realmStatus.CheckAsync(realm);
+
+            RealmlistStatusDot.Fill = status switch
+            {
+                RealmStatus.Online => RealmOnlineBrush,
+                RealmStatus.Offline => RealmOfflineBrush,
+                _ => RealmUnknownBrush,
+            };
+            RealmlistStatusDot.ToolTip = status switch
+            {
+                RealmStatus.Online => "Realm is up — auth server accepted a connection.",
+                RealmStatus.Offline => "Realm appears to be down — auth server refused the connection or timed out.",
+                _ when string.IsNullOrEmpty(realm) => "No realmlist set.",
+                _ => "Realm address doesn't resolve — check the realmlist for typos.",
+            };
+
+            // Only cache addresses that actually resolve (Online or Offline both mean "a real host");
+            // Unknown means DNS itself failed, so it's a typo'd/fake address that would just pollute
+            // the dropdown with junk the user never meant to keep. A real server that's just
+            // temporarily down still gets cached — the whole point is being able to switch back to it
+            // once it's back up. The mirror case: this same periodic check also catches a realm that
+            // used to resolve but no longer does (e.g. decommissioned) and prunes it back out, but
+            // only for whichever realm is currently active — a cached-but-unvisited entry elsewhere in
+            // the dropdown isn't re-checked until the user actually selects it.
+            if (status != RealmStatus.Unknown)
+            {
+                RecordRealmlistHistory(realm);
+            }
+            else
+            {
+                RemoveRealmlistHistory(realm);
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _realmStatusCheckInFlight, 0);
+        }
+    }
+
+    /// <summary>
+    /// Adds a confirmed-resolvable realm to the front of the history dropdown (most-recent-first,
+    /// deduplicated, capped), persisting only when something actually changed.
+    /// </summary>
+    private void RecordRealmlistHistory(string realm)
+    {
+        if (string.IsNullOrWhiteSpace(realm))
+        {
+            return;
+        }
+
+        List<string> history = _settings.Current.RealmlistHistory;
+        if (history.Count > 0 && string.Equals(history[0], realm, StringComparison.OrdinalIgnoreCase))
+        {
+            return; // already the most-recent entry; nothing to change
+        }
+
+        history.RemoveAll(h => string.Equals(h, realm, StringComparison.OrdinalIgnoreCase));
+        history.Insert(0, realm);
+        const int maxHistory = 10;
+        if (history.Count > maxHistory)
+        {
+            history.RemoveRange(maxHistory, history.Count - maxHistory);
+        }
+
+        _settings.Save();
+        RefreshRealmlistHistoryItems();
+    }
+
+    /// <summary>Prunes a realm that no longer resolves at all — the reverse of <see cref="RecordRealmlistHistory"/>.</summary>
+    private void RemoveRealmlistHistory(string realm)
+    {
+        if (string.IsNullOrWhiteSpace(realm))
+        {
+            return;
+        }
+
+        int removed = _settings.Current.RealmlistHistory.RemoveAll(h => string.Equals(h, realm, StringComparison.OrdinalIgnoreCase));
+        if (removed > 0)
+        {
+            _settings.Save();
+            RefreshRealmlistHistoryItems();
+        }
+    }
+
+    private void RefreshRealmlistHistoryItems()
+    {
+        string current = RealmlistBox.Text;
+        _realmlistHistoryItems.Clear();
+        foreach (string h in _settings.Current.RealmlistHistory)
+        {
+            _realmlistHistoryItems.Add(h);
+        }
+
+        // Refreshing ItemsSource can otherwise disturb an editable ComboBox's own in-progress text.
+        RealmlistBox.Text = current;
+    }
+
+    private void OnRealmlistHistorySelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (RealmlistBox.SelectedItem is string selected && !_loading)
+        {
+            RealmlistBox.Text = selected;
+            UpdateRealmlistLabel();
+            ScheduleSettingsSave();
+        }
     }
 
     // ---------------- Settings tab ----------------
@@ -1211,7 +1455,133 @@ public partial class MainWindow : Window
         await RunClientDownloadAsync(wowDir, "Game files repaired.", "Repair failed");
     }
 
+    /// <summary>
+    /// One-time-per-launch check: WoW.exe.backup is the pristine source every future patch rebuild is
+    /// built from, so if it's changed since it was created (disk corruption, an interrupted write from
+    /// before the atomic-rename fix, or external tampering), that corruption would otherwise carry
+    /// silently into every patch from here on. Offers a repair (which also re-establishes a fresh,
+    /// verified backup) rather than just logging it where it'd likely go unnoticed.
+    /// </summary>
+    private async Task VerifyPristineBackupIntegrityAsync()
+    {
+        string wowDir = CurrentWowDir();
+        BackupIntegrityStatus status;
+        try
+        {
+            status = await Task.Run(() => _orchestrator.VerifyPristineBackupIntegrity(wowDir));
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"Could not verify the pristine backup's integrity: {ex.Message}");
+            return;
+        }
+
+        if (status != BackupIntegrityStatus.Mismatch)
+        {
+            return;
+        }
+
+        _log.Warn("WoW.exe.backup no longer matches the hash recorded when it was created — it may be corrupted or was modified outside the launcher.");
+
+        var confirm = new ConfirmDialog(
+            "Backup integrity check failed",
+            "Your saved pristine WoW.exe backup appears to have changed unexpectedly since it was " +
+            "created — it may be corrupted, or modified outside the launcher. Every executable patch " +
+            "is rebuilt from this file, so if it's no longer truly clean, that corruption would carry " +
+            "into every future patch.\n\n" +
+            "Repair Game Files now to get a guaranteed-clean client? This also re-establishes a fresh, verified backup.",
+            confirmText: "Repair Now",
+            cancelText: "Later");
+        if (ShowModal(confirm) != true)
+        {
+            return;
+        }
+
+        _orchestrator.DiscardCorruptBackup(wowDir);
+        await RunClientDownloadAsync(wowDir, "Game files repaired.", "Repair failed");
+    }
+
     // ---------------- Play / Install / Update ----------------
+
+    /// <summary>
+    /// Multi-instance guard: a second WoW.exe from the same game folder sharing one Data\/WTF\ folder
+    /// risks save/cache write conflicts, and it was previously possible to spawn one anyway since only
+    /// the executable-patch step (not the actual launch) checked whether the game was already running.
+    ///
+    /// Checks two things, either of which counts as "running": (1) the specific process we ourselves
+    /// last launched, tracked by PID and checked via Process.GetProcessById/.HasExited — reliable even
+    /// right after injection, when it's still settling; (2) GameProcessService's folder-based scan,
+    /// for a WoW.exe the user started some other way (double-clicking it directly) that we never
+    /// launched and so have no PID for. (1) exists specifically because (2) alone isn't reliable
+    /// enough right after our own launch: it matches by reading the process's MainModule path, which
+    /// can throw (and get silently treated as "not running") for a process still settling from
+    /// CreateSuspended+inject+Resume — the exact same access-denied failure mode already seen from
+    /// AutoLoginService querying the same freshly-launched process's I/O counters.
+    /// </summary>
+    private void OnGameRunningTick(object? sender, EventArgs e)
+    {
+        bool running = IsTrackedLaunchStillRunning() || _processCheck.IsRunning(CurrentWowDir());
+        if (running == _wowAlreadyRunning)
+        {
+            return;
+        }
+
+        _wowAlreadyRunning = running;
+        UpdatePlayButtonEnabled();
+    }
+
+    private bool IsTrackedLaunchStillRunning()
+    {
+        if (_launchedGameProcessId is not int pid)
+        {
+            return false;
+        }
+
+        try
+        {
+            using Process process = Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            // No process with this ID any more - it has exited (or the ID was recycled to something
+            // else, in which case treating it as "gone" is still the correct, safe answer).
+            _launchedGameProcessId = null;
+            return false;
+        }
+        catch (Win32Exception)
+        {
+            // The process exists but denied even this minimal query — the same access-denied wall
+            // AutoLoginService already hit querying I/O counters on this same freshly-injected
+            // process. Since we can't tell either way, fail toward "still running": that just keeps
+            // Play disabled a little longer than strictly necessary, whereas assuming "not running"
+            // risks re-enabling it and letting a second instance through — the one thing this guard
+            // exists to prevent. Not a permanent stuck state either way: the folder-based fallback
+            // check (GameProcessService.IsRunning, OR'd in by the caller) doesn't depend on this PID
+            // at all, so it still correctly detects the moment this process actually exits.
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// PlayButton.IsEnabled has two independent reasons to be false — an install/update/launch flow
+    /// already in progress, or the game already running — so every place that used to toggle it
+    /// directly goes through here instead, or one flag finishing would incorrectly re-enable the
+    /// button while the other reason still applies.
+    /// </summary>
+    private void SetLaunchOperationBusy(bool busy)
+    {
+        _launchOperationBusy = busy;
+        UpdatePlayButtonEnabled();
+    }
+
+    private void UpdatePlayButtonEnabled()
+    {
+        PlayButton.IsEnabled = !_launchOperationBusy && !_wowAlreadyRunning;
+        PlayButton.ToolTip = _wowAlreadyRunning
+            ? "WoW is already running from this game folder — close it first."
+            : null;
+    }
 
     private void SetPlayState(PlayButtonState state)
     {
@@ -1304,7 +1674,7 @@ public partial class MainWindow : Window
 
     private async Task<bool> RunClientDownloadAsync(string targetDir, string successMessage, string failureMessage)
     {
-        PlayButton.IsEnabled = false;
+        SetLaunchOperationBusy(true);
         MainProgressBar.Visibility = Visibility.Visible;
         MainProgressBar.IsIndeterminate = false;
         MainProgressBar.Value = 0;
@@ -1328,7 +1698,7 @@ public partial class MainWindow : Window
         finally
         {
             MainProgressBar.Visibility = Visibility.Collapsed;
-            PlayButton.IsEnabled = true;
+            SetLaunchOperationBusy(false);
         }
     }
 
@@ -1364,15 +1734,67 @@ public partial class MainWindow : Window
 
     private async Task RunPlayFlowAsync()
     {
+        // Belt-and-suspenders against the 2-second poll's own race window: re-check right at the
+        // moment of the click rather than trusting whatever OnGameRunningTick last observed.
+        if (IsTrackedLaunchStillRunning() || _processCheck.IsRunning(CurrentWowDir()))
+        {
+            _wowAlreadyRunning = true;
+            UpdatePlayButtonEnabled();
+            UpdateStatus("WoW is already running from this game folder — close it first.");
+            return;
+        }
+
         CollectSettingsFromUi();
         _settings.Save();
 
-        PlayButton.IsEnabled = false;
+        // Last-chance guard, independent of which tab the user was actually looking at: launching in
+        // this state doesn't degrade gracefully, it makes WoW refuse to start entirely (a "corrupted
+        // Data folder" error), so this is caught here even if both tab warnings went unnoticed.
+        bool signatureRemovalEnabled = _settings.Current.EnabledPatchIds.Contains("signature-removal");
+        int activeMpqCount = _mpq.Scan(CurrentWowDir()).Count(p => p.Enabled);
+        if (!signatureRemovalEnabled && activeMpqCount > 0)
+        {
+            string patchWord = activeMpqCount == 1 ? "patch" : "patches";
+            var confirm = new ConfirmDialog(
+                "Launch will fail",
+                $"Signature Removal is off, but {activeMpqCount} custom MPQ {patchWord} are still active.\n\n" +
+                "WoW will refuse to launch and report a corrupted Data folder instead of just ignoring them.\n\n" +
+                "Enable Signature Removal now and continue?",
+                confirmText: "Enable & Continue",
+                cancelText: "Cancel");
+            if (ShowModal(confirm) != true)
+            {
+                UpdateStatus("Launch cancelled — resolve the Signature Removal / MPQ patch conflict first.");
+                return;
+            }
+
+            PatchControl? signatureControl = _patchControls.FirstOrDefault(pc => pc.Def.Id == "signature-removal");
+            if (signatureControl is not null)
+            {
+                signatureControl.Box.IsChecked = true;
+            }
+
+            CollectSettingsFromUi();
+            _settings.Save();
+            RefreshSignatureMpqWarning();
+        }
+
+        SetLaunchOperationBusy(true);
         var progress = new Progress<string>(UpdateStatus);
         try
         {
-            bool ok = await _orchestrator.PlayAsync(progress);
-            UpdateStatus(ok ? "Launched." : "Launch failed — see the Log tab.");
+            PlayResult result = await _orchestrator.PlayAsync(progress);
+            UpdateStatus(result.Success ? "Launched." : "Launch failed — see the Log tab.");
+
+            // We just created this process ourselves, so its PID is known for certain — no need to
+            // re-scan/re-match by module path (the fragile check that let a second instance slip
+            // through: MainModule access can be denied for a process still settling right after
+            // CreateSuspended+inject+Resume, which silently reads as "not running").
+            if (result is { Success: true, ProcessId: int pid })
+            {
+                _launchedGameProcessId = pid;
+                _wowAlreadyRunning = true;
+            }
         }
         catch (Exception ex)
         {
@@ -1381,7 +1803,12 @@ public partial class MainWindow : Window
         }
         finally
         {
-            PlayButton.IsEnabled = true;
+            if (!_wowAlreadyRunning)
+            {
+                _wowAlreadyRunning = IsTrackedLaunchStillRunning() || _processCheck.IsRunning(CurrentWowDir());
+            }
+
+            SetLaunchOperationBusy(false);
         }
     }
 
@@ -1389,13 +1816,63 @@ public partial class MainWindow : Window
 
     private void UpdateStatus(string message) => StatusText.Text = message;
 
+    // Caps _logItems so a long play session can't grow it without bound — Logger's own per-day log
+    // file on disk is a separate, complete record and is unaffected by this trim.
+    private const int MaxLogItems = 2000;
+
     private void OnMessageLogged(object? sender, LogEntry entry)
     {
         Dispatcher.BeginInvoke(() =>
         {
-            LogBox.AppendText($"{entry.Timestamp:HH:mm:ss} [{entry.Level}] {entry.Message}{Environment.NewLine}");
-            LogBox.ScrollToEnd();
+            _logItems.Add(entry);
+            while (_logItems.Count > MaxLogItems)
+            {
+                _logItems.RemoveAt(0);
+            }
+
+            LogScrollViewer.ScrollToEnd();
         });
+    }
+
+    private void OnClearLog(object sender, RoutedEventArgs e) => _logItems.Clear();
+
+    private void OnCopyLog(object sender, RoutedEventArgs e)
+    {
+        string text = string.Join(
+            Environment.NewLine,
+            _logItems.Select(entry => $"{entry.Timestamp:HH:mm:ss} [{entry.LevelDisplay}] {entry.Message}"));
+        try { Clipboard.SetText(text); } catch { /* clipboard can be transiently locked by another app */ }
+    }
+
+    private void OnOpenLogFolder(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string? dir = Path.GetDirectoryName(_log.LogFilePath);
+            if (dir is not null)
+            {
+                Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = true });
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"Could not open log folder: {ex.Message}");
+        }
+    }
+
+    // Same standalone-ScrollBar-drives-a-hidden-ScrollViewer pattern as MPQ Patches/Addons (see
+    // OnAddonScrollBarScroll's own comment for the alignment rationale).
+    private void OnLogScrollBarScroll(object sender, ScrollEventArgs e) => LogScrollViewer.ScrollToVerticalOffset(e.NewValue);
+
+    // LogList is a ListBox, which always carries its own internal ScrollViewer even with its scrollbar
+    // visibility set to Disabled — that inner ScrollViewer still claims (marks Handled) any mouse wheel
+    // input over the list, so it never reaches LogScrollViewer above it. Intercepting the wheel here,
+    // before the ListBox's own handler runs, and driving LogScrollViewer directly is the standard
+    // workaround for this nested-ScrollViewer wheel-eating behavior.
+    private void OnLogListPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        LogScrollViewer.ScrollToVerticalOffset(LogScrollViewer.VerticalOffset - e.Delta);
+        e.Handled = true;
     }
 
     private void RadioButton_Checked(object sender, RoutedEventArgs e)
