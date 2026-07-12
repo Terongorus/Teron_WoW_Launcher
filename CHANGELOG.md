@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [1.11.0] - 2026-07-12
+
+### Added
+
+- "Clean up client cache (WDB) before every launch" option (Settings tab): deletes the WDB folder
+  right before Play starts the game. The client rebuilds it automatically from the server, so this
+  is always safe — useful on private servers where stale cached item/quest data causes wrong
+  names, tooltips, or icons.
+- "Minimize the launcher when the game starts" option (Settings tab): minimizes the launcher the
+  moment the game process is up and every DLL is injected, rather than waiting for auto-login to
+  finish first.
+- The launcher now always comes back to the foreground automatically the moment the game closes,
+  whether or not the option above is enabled — no more manually alt-tabbing back to it.
+- The Addons tab's "Refresh" (local-folder adoption + update check) now also runs once
+  automatically on startup, alongside the DLL and MPQ patch scans that already did.
+- The Play button now turns a flat gray whenever it's actually disabled (game already running, or
+  a launch/install/update in progress), instead of just fading its state color to partial opacity.
+
+### Fixed
+
+- The multi-instance guard now tracks the launched game's process ID from the moment it's created
+  and injected, instead of only after the entire launch (including auto-login) finishes — closing
+  a window where clicking Play again during that stretch would fall back to a less reliable,
+  folder-based process check.
+
 ## [1.10.0] - 2026-07-11
 
 ### Added

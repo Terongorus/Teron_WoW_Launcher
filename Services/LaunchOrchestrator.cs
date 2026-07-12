@@ -45,7 +45,14 @@ public sealed class LaunchOrchestrator
 
     public LaunchOrchestrator(SettingsService settings) => _settings = settings;
 
-    public async Task<PlayResult> PlayAsync(IProgress<string>? progress = null, CancellationToken ct = default)
+    /// <param name="onProcessLaunched">
+    /// Fired as soon as the game process exists and every DLL is injected — before auto-login runs,
+    /// which can take several more seconds waiting for the window/loading screen. Lets the caller
+    /// start treating the game as "running" (multi-instance guard, minimize-on-launch) the moment
+    /// that's actually true, instead of only after the whole method returns.
+    /// </param>
+    public async Task<PlayResult> PlayAsync(
+        IProgress<string>? progress = null, Action<int>? onProcessLaunched = null, CancellationToken ct = default)
     {
         void Report(string message)
         {
@@ -90,6 +97,10 @@ public sealed class LaunchOrchestrator
 
         // Remember the accepted DLL list so the UI can flag changes next time.
         _dlls.UpdateCache(wowDir, injectList);
+
+        // The process is confirmed alive and fully injected at this point, even though auto-login
+        // (which can take several more seconds) hasn't run yet.
+        onProcessLaunched?.Invoke(result.ProcessId);
 
         // 5. Auto-login.
         LauncherSettings s = _settings.Current;

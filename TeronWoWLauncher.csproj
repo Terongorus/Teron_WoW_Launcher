@@ -22,8 +22,8 @@
     <Product>Teron WoW Launcher (TWL)</Product>
     <Company>Teronverse</Company>
     <Authors>Kaloyan Kolev</Authors>
-    <Version>1.10.0</Version>
-    <!-- Keep AssemblyInformationalVersion clean ("1.10.0", not "1.10.0+<gitsha>"). -->
+    <Version>1.11.0</Version>
+    <!-- Keep AssemblyInformationalVersion clean ("1.11.0", not "1.11.0+<gitsha>"). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 
     <!-- Shown in Explorer/taskbar/Alt+Tab (and used as MainWindow's own icon below, since the

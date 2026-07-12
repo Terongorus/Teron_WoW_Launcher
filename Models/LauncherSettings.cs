@@ -34,6 +34,13 @@ public sealed class LauncherSettings
     /// <summary>Delay (ms) after the game window appears before typing credentials.</summary>
     public int LoginDelayMs { get; set; } = 4000;
 
+    /// <summary>Delete the WDB client cache folder before every launch, so stale cached item/quest/
+    /// NPC data (a common source of display bugs on private servers) can't linger.</summary>
+    public bool CleanWdbBeforeLaunch { get; set; }
+
+    /// <summary>Minimize the launcher window as soon as Play successfully starts the game.</summary>
+    public bool MinimizeOnLaunch { get; set; }
+
     /// <summary>Desired realmlist value written to realmlist.wtf (e.g. "set realmlist logon.server").</summary>
     public string Realmlist { get; set; } = string.Empty;
 
