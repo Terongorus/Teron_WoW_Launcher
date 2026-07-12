@@ -14,6 +14,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
@@ -22,6 +23,7 @@ using Markdig.Wpf;
 using Microsoft.Win32;
 using TeronWoWLauncher.Dialogs;
 using TeronWoWLauncher.Models;
+using TeronWoWLauncher.Native;
 using TeronWoWLauncher.Services;
 
 namespace TeronWoWLauncher;
@@ -39,6 +41,7 @@ public partial class MainWindow : Window
     private readonly RealmStatusChecker _realmStatus = new();
     private readonly GameInstallService _install = new();
     private readonly GameProcessService _processCheck = new();
+    private readonly GameCacheService _gameCache = new();
     private readonly AddonLibrary _addons = new();
 
     private readonly List<PatchControl> _patchControls = new();
@@ -62,6 +65,11 @@ public partial class MainWindow : Window
     private bool _wowAlreadyRunning;
     private int? _launchedGameProcessId;
 
+    /// <summary>Set only when we minimized the window ourselves for a launch (see MinimizeOnLaunch),
+    /// so restoring it when the game exits puts it back exactly how the user left it (Normal or
+    /// Maximized) instead of always forcing Normal.</summary>
+    private WindowState? _windowStateBeforeMinimize;
+
     // Last values a settings-save actually acted on, so retyping the same folder/URL/realmlist
     // doesn't re-trigger the heavier side effects (folder rescans, a network update check) every tick.
     private string _lastAppliedWowDir = string.Empty;
@@ -77,6 +85,7 @@ public partial class MainWindow : Window
     private static readonly Brush PlayColor = new SolidColorBrush(Color.FromRgb(0x3B, 0x7D, 0x3B));
     private static readonly Brush InstallColor = new SolidColorBrush(Color.FromRgb(0x2E, 0x6D, 0xA4));
     private static readonly Brush UpdateColor = new SolidColorBrush(Color.FromRgb(0xC9, 0x92, 0x2B));
+    private static readonly Brush DisabledPlayColor = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x54));
     private static readonly Brush RealmOnlineBrush = new SolidColorBrush(Color.FromRgb(0x3B, 0x7D, 0x3B));
     private static readonly Brush RealmOfflineBrush = new SolidColorBrush(Color.FromRgb(0xB3, 0x3A, 0x3A));
     private static readonly Brush RealmUnknownBrush = new SolidColorBrush(Color.FromRgb(0x6A, 0x6A, 0x72));
@@ -148,6 +157,10 @@ public partial class MainWindow : Window
         RealmlistBox.LostFocus += (_, _) => UpdateRealmlistLabel();
         ClientUrlBox.TextChanged += (_, _) => ScheduleSettingsSave();
         DelayBox.TextChanged += (_, _) => ScheduleSettingsSave();
+        CleanWdbCheck.Checked += (_, _) => ScheduleSettingsSave();
+        CleanWdbCheck.Unchecked += (_, _) => ScheduleSettingsSave();
+        MinimizeOnLaunchCheck.Checked += (_, _) => ScheduleSettingsSave();
+        MinimizeOnLaunchCheck.Unchecked += (_, _) => ScheduleSettingsSave();
 
         _loading = true;
         BuildPatchList();
@@ -169,9 +182,15 @@ public partial class MainWindow : Window
         _ = RefreshPlayButtonStateAsync();
         _ = LoadDocsFromGitHubAsync();
 
-        // Deferred to Loaded rather than run here directly: showing a modal ConfirmDialog needs its
-        // Owner (this window) to have already been shown, which hasn't happened yet mid-constructor.
+        // Deferred to Loaded rather than run here directly: showing a modal ConfirmDialog/dialog needs
+        // its Owner (this window) to have already been shown, which hasn't happened yet mid-constructor.
         Loaded += (_, _) => _ = VerifyPristineBackupIntegrityAsync();
+
+        // Same startup re-scan the Addons tab's own "Refresh" button does (local-folder adoption +
+        // update check), so a newer addon version or a manually-dropped-in folder surfaces without the
+        // user having to remember to click it. DLL "detected" and MPQ patch scans already happen above
+        // (RefreshDetectedDlls/RefreshMpqList), since re-scanning those doesn't need a shown Owner.
+        Loaded += (_, _) => _ = RefreshAddonsAsync();
     }
 
     // ---------------- Custom title bar ----------------
@@ -1085,33 +1104,59 @@ public partial class MainWindow : Window
     /// existing addon's name, and check every remote-tracked addon for an update. A conflict dialog only
     /// appears when a local folder's name actually collides with something already tracked.
     /// </summary>
-    private async void OnRefreshAddons(object sender, RoutedEventArgs e)
+    private async void OnRefreshAddons(object sender, RoutedEventArgs e) => await RefreshAddonsAsync();
+
+    /// <summary>
+    /// Reloads addons.json, re-reads each tracked addon's own .toc, adopts/flags untracked local
+    /// AddOns folders, and checks every remote-tracked addon for updates — everything the Addons
+    /// tab's "Refresh" button does. Also run once automatically on startup (see the constructor),
+    /// so new updates/local folders surface without the user having to remember to click Refresh.
+    ///
+    /// Shares <see cref="_addonBusy"/> with <see cref="AddAddonAsync"/>: without this, the startup
+    /// auto-refresh could overlap with a near-simultaneous Add/Update click (both read-modify-write
+    /// the same in-memory addon list and addons.json), which wasn't reachable before this ran
+    /// automatically — previously only two rapid manual Refresh clicks could race.
+    /// </summary>
+    private async Task RefreshAddonsAsync()
     {
-        string wowDir = CurrentWowDir();
-
-        _addons.Load();
-        _addons.RefreshMetadataFromDisk(wowDir);
-
-        AddonLibrary.LocalAddonSyncResult sync = _addons.SyncLocalAddons(wowDir);
-        if (sync.Conflicts.Count > 0)
+        if (_addonBusy)
         {
-            var dialog = new LocalAddonsDialog(sync.Conflicts);
-            if (ShowModal(dialog) == true)
-            {
-                foreach (LocalAddonCandidate candidate in dialog.Selected)
-                {
-                    _addons.Adopt(candidate);
-                }
-            }
+            return;
         }
 
-        AddonStatusText.Text = "Checking for addon updates…";
-        await _addons.CheckForUpdatesAsync();
+        _addonBusy = true;
+        try
+        {
+            string wowDir = CurrentWowDir();
 
-        RefreshAddonList();
-        AddonStatusText.Text = sync.AutoAdopted > 0
-            ? $"Refreshed. {sync.AutoAdopted} local addon(s) added automatically."
-            : "Refreshed.";
+            _addons.Load();
+            _addons.RefreshMetadataFromDisk(wowDir);
+
+            AddonLibrary.LocalAddonSyncResult sync = _addons.SyncLocalAddons(wowDir);
+            if (sync.Conflicts.Count > 0)
+            {
+                var dialog = new LocalAddonsDialog(sync.Conflicts);
+                if (ShowModal(dialog) == true)
+                {
+                    foreach (LocalAddonCandidate candidate in dialog.Selected)
+                    {
+                        _addons.Adopt(candidate);
+                    }
+                }
+            }
+
+            AddonStatusText.Text = "Checking for addon updates…";
+            await _addons.CheckForUpdatesAsync();
+
+            RefreshAddonList();
+            AddonStatusText.Text = sync.AutoAdopted > 0
+                ? $"Refreshed. {sync.AutoAdopted} local addon(s) added automatically."
+                : "Refreshed.";
+        }
+        finally
+        {
+            _addonBusy = false;
+        }
     }
 
     // ---------------- Home tab (Login & Game) ----------------
@@ -1125,6 +1170,8 @@ public partial class MainWindow : Window
         SavePasswordCheck.IsChecked = s.SavePassword;
         PasswordBoxInput.Password = s.SavePassword ? _settings.GetPassword() : string.Empty;
         DelayBox.Text = s.LoginDelayMs.ToString(CultureInfo.InvariantCulture);
+        CleanWdbCheck.IsChecked = s.CleanWdbBeforeLaunch;
+        MinimizeOnLaunchCheck.IsChecked = s.MinimizeOnLaunch;
         RealmlistBox.Text = s.Realmlist;
         RefreshRealmlistHistoryItems();
         ClientUrlBox.Text = string.IsNullOrWhiteSpace(s.ClientDownloadUrl)
@@ -1145,6 +1192,8 @@ public partial class MainWindow : Window
         s.LoginDelayMs = int.TryParse(DelayBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int d)
             ? Math.Max(0, d)
             : s.LoginDelayMs;
+        s.CleanWdbBeforeLaunch = CleanWdbCheck.IsChecked == true;
+        s.MinimizeOnLaunch = MinimizeOnLaunchCheck.IsChecked == true;
         s.Realmlist = RealmlistBox.Text.Trim();
 
         // Only accept a well-formed absolute http(s) URL; otherwise keep whatever was last valid
@@ -1528,6 +1577,39 @@ public partial class MainWindow : Window
 
         _wowAlreadyRunning = running;
         UpdatePlayButtonEnabled();
+
+        if (!running)
+        {
+            FocusLauncherWindow();
+        }
+    }
+
+    /// <summary>
+    /// Brings the launcher back to the foreground once the game exits, so the user doesn't have to
+    /// manually alt-tab back to it. Always active, regardless of MinimizeOnLaunch — restores from
+    /// whatever state we minimized it to (Normal or Maximized), or just re-activates it if it was
+    /// never minimized (e.g. the user alt-tabbed away rather than us hiding it).
+    /// </summary>
+    private void FocusLauncherWindow()
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = _windowStateBeforeMinimize ?? WindowState.Normal;
+        }
+
+        _windowStateBeforeMinimize = null;
+
+        Show();
+        Activate();
+
+        // Activate() alone can be silently ignored by Windows' foreground-lock restrictions when
+        // another app currently owns focus (the exact same unreliability AutoLoginService already
+        // works around for the game window) — the direct Win32 call is a more reliable fallback.
+        IntPtr hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd != IntPtr.Zero)
+        {
+            User32.SetForegroundWindow(hwnd);
+        }
     }
 
     private bool IsTrackedLaunchStillRunning()
@@ -1581,17 +1663,38 @@ public partial class MainWindow : Window
         PlayButton.ToolTip = _wowAlreadyRunning
             ? "WoW is already running from this game folder — close it first."
             : null;
+        UpdatePlayButtonAppearance();
     }
 
     private void SetPlayState(PlayButtonState state)
     {
         _playState = state;
-        (PlayButton.Content, PlayButton.Background) = state switch
+        PlayButton.Content = state switch
         {
-            PlayButtonState.Install => ("INSTALL", InstallColor),
-            PlayButtonState.Update => ("UPDATE", UpdateColor),
-            _ => ("PLAY", PlayColor),
+            PlayButtonState.Install => "INSTALL",
+            PlayButtonState.Update => "UPDATE",
+            _ => "PLAY",
         };
+        UpdatePlayButtonAppearance();
+    }
+
+    /// <summary>
+    /// The Play button's background follows its state color (Play/Install/Update) normally, but
+    /// turns flat gray whenever it's actually disabled — the app-wide Button style's default
+    /// IsEnabled=False behavior only dims content to 45% opacity, which still reads as "colored but
+    /// faded" rather than clearly inactive. Called after either half of the button's appearance
+    /// (enabled/disabled, or which state it's in) changes, since both feed into this.
+    /// </summary>
+    private void UpdatePlayButtonAppearance()
+    {
+        PlayButton.Background = !PlayButton.IsEnabled
+            ? DisabledPlayColor
+            : _playState switch
+            {
+                PlayButtonState.Install => InstallColor,
+                PlayButtonState.Update => UpdateColor,
+                _ => PlayColor,
+            };
     }
 
     private async Task RefreshPlayButtonStateAsync()
@@ -1779,22 +1882,17 @@ public partial class MainWindow : Window
             RefreshSignatureMpqWarning();
         }
 
+        if (_settings.Current.CleanWdbBeforeLaunch)
+        {
+            _gameCache.Clear(CurrentWowDir());
+        }
+
         SetLaunchOperationBusy(true);
         var progress = new Progress<string>(UpdateStatus);
         try
         {
-            PlayResult result = await _orchestrator.PlayAsync(progress);
+            PlayResult result = await _orchestrator.PlayAsync(progress, OnGameProcessLaunched);
             UpdateStatus(result.Success ? "Launched." : "Launch failed — see the Log tab.");
-
-            // We just created this process ourselves, so its PID is known for certain — no need to
-            // re-scan/re-match by module path (the fragile check that let a second instance slip
-            // through: MainModule access can be denied for a process still settling right after
-            // CreateSuspended+inject+Resume, which silently reads as "not running").
-            if (result is { Success: true, ProcessId: int pid })
-            {
-                _launchedGameProcessId = pid;
-                _wowAlreadyRunning = true;
-            }
         }
         catch (Exception ex)
         {
@@ -1809,6 +1907,33 @@ public partial class MainWindow : Window
             }
 
             SetLaunchOperationBusy(false);
+        }
+    }
+
+    /// <summary>
+    /// Called by LaunchOrchestrator.PlayAsync the moment the game process exists and every DLL is
+    /// injected — well before auto-login finishes (which can take several more seconds waiting for
+    /// the window/loading screen). Runs on the UI thread, same as the rest of RunPlayFlowAsync (no
+    /// ConfigureAwait(false) anywhere in this codebase, so the await chain never leaves it).
+    ///
+    /// Tracking the PID this early (rather than only after the whole flow returns) matters for the
+    /// multi-instance guard specifically: without it, a click on Play during that several-second
+    /// auto-login window would fall back to the folder-based process scan — the exact fragile,
+    /// module-path-matching check that can throw/misreport "not running" for a process still
+    /// settling right after CreateSuspended+inject+Resume, which is what let a second instance slip
+    /// through in the first place.
+    /// </summary>
+    private void OnGameProcessLaunched(int pid)
+    {
+        _launchedGameProcessId = pid;
+        _wowAlreadyRunning = true;
+        UpdatePlayButtonEnabled();
+
+        if (_settings.Current.MinimizeOnLaunch && WindowState != WindowState.Minimized)
+        {
+            _log.Info("Minimizing launcher window (game started).");
+            _windowStateBeforeMinimize = WindowState;
+            WindowState = WindowState.Minimized;
         }
     }
 

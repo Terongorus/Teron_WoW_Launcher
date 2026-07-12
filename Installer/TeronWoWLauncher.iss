@@ -14,7 +14,7 @@
 ; comment in TeronWoWLauncher.csproj. There is no x64 build of this app to package.
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.10.0"
+  #define MyAppVersion "1.11.0"
 #endif
 
 #define MyAppName "Teron WoW Launcher"

@@ -9,7 +9,8 @@ runs behind your back.
 
 Point it at your WoW folder (or let it install the client for you), hit **Play**, and it patches
 the executable, injects your DLLs, launches the game, and logs you in — in that order, every
-time, automatically skipping anything that hasn't changed since last time.
+time, automatically skipping anything that hasn't changed since last time. The launcher steps back
+out of your way once the game is up, and comes back to the front on its own the moment you close it.
 
 ## Getting started
 
@@ -70,7 +71,9 @@ URL, or point at a `.zip`/`.rar`/`.7z` you already downloaded. Addon names rende
 in-game color codes, and versions come straight from each addon's own `.toc` file rather than a
 GitHub release tag. Hitting **Refresh** does everything at once — checks every tracked addon for
 updates, and picks up any folder you dropped into `Interface\AddOns` by hand, prompting you before
-adopting anything that might conflict with what's already tracked. The search box filters the list
+adopting anything that might conflict with what's already tracked. This same check also runs once
+automatically every time the launcher starts, alongside the DLL and MPQ patch scans, so you don't
+have to remember to click it. The search box filters the list
 live by name as your addon count grows, and each row's info button shows that addon's own
 README — from its GitHub repo, a local README file, or its `.toc` as a last resort — without
 leaving the app. If several addons have updates queued up, **Update All** installs every one of
@@ -84,8 +87,12 @@ The one place for launcher-level configuration: your install directory, realmlis
 download URL (only needed if you're not using the default), and the auto-login delay fallback.
 **Repair Game Files** re-downloads and reinstalls the whole client from the source URL, overwriting
 anything that differs locally — useful if something's gotten corrupted and you don't want to track
-down which file. Ignored DLLs (see the DLLs tab above) are managed here too, individually or all
-at once.
+down which file. Two optional toggles live here too: cleaning up the WDB client cache before every
+launch (safe — the client rebuilds it from the server — and useful on private servers where stale
+cached data shows wrong item/quest names, tooltips, or icons), and minimizing the launcher the
+moment the game starts (it always comes back to the foreground on its own once the game closes,
+whether or not this is on). Ignored DLLs (see the DLLs tab above) are managed here too,
+individually or all at once.
 
 ### Log
 
@@ -123,7 +130,7 @@ own code.
 
 ## Project status
 
-Version 1.10.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
+Version 1.11.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
 ## License

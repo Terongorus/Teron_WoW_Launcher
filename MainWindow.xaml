@@ -607,6 +607,16 @@
                          Text="Fallback only (ms): the launcher normally detects when the client has finished loading on its own and logs in immediately. This delay is used only if that detection can't tell in time." TextWrapping="Wrap"/>
               <TextBox x:Name="DelayBox" Width="130" HorizontalAlignment="Left" Margin="0,0,0,20"/>
 
+              <TextBlock Style="{StaticResource Heading3Text}" Text="Client cache"/>
+              <CheckBox x:Name="CleanWdbCheck" Content="Clean up client cache (WDB) before every launch" Margin="0,4,0,4"/>
+              <TextBlock Style="{StaticResource MicroText}" TextWrapping="Wrap" Margin="0,0,0,20"
+                         Text="Deletes the WDB folder before Play starts the game. It's rebuilt automatically from the server, so this is always safe — useful on private servers where stale cached item/quest data can cause wrong names, tooltips, or icons."/>
+
+              <TextBlock Style="{StaticResource Heading3Text}" Text="Launcher window"/>
+              <CheckBox x:Name="MinimizeOnLaunchCheck" Content="Minimize the launcher when the game starts" Margin="0,4,0,4"/>
+              <TextBlock Style="{StaticResource MicroText}" TextWrapping="Wrap" Margin="0,0,0,20"
+                         Text="The launcher automatically comes back to the foreground once the game closes, whether or not this is enabled."/>
+
               <TextBlock Style="{StaticResource Heading3Text}" Text="Ignored DLLs"/>
               <TextBlock Style="{StaticResource MicroText}"
                          Text="DLLs hidden from the DLLs tab's &quot;Detected in game folder&quot; list (e.g. files that aren't actually meant for injection). Un-ignore to make them detectable again."
