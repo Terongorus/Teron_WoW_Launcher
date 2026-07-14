@@ -66,9 +66,10 @@ deleted). Blizzard's own base-game archives are never shown or touched.
 
 ### Addons
 
-Install addons the way that's actually convenient: paste a GitHub repo link, a direct archive
-URL, or point at a `.zip`/`.rar`/`.7z` you already downloaded. Addon names render with their real
-in-game color codes, and versions come straight from each addon's own `.toc` file rather than a
+Install addons the way that's actually convenient: paste a GitHub repo link, a Legacy-WoW or
+Warperia addon page link, a direct archive URL, or point at a `.zip`/`.rar`/`.7z` you already
+downloaded. Addon names render with their real in-game color codes, and versions come straight
+from each addon's own `.toc` file rather than a
 GitHub release tag. Hitting **Refresh** does everything at once — checks every tracked addon for
 updates, and picks up any folder you dropped into `Interface\AddOns` by hand, prompting you before
 adopting anything that might conflict with what's already tracked. This same check also runs once
@@ -130,7 +131,7 @@ own code.
 
 ## Project status
 
-Version 1.11.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
+Version 1.12.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
 ## License

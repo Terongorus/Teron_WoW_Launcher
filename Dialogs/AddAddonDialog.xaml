@@ -35,7 +35,7 @@
                 <TextBlock Grid.Row="0" Style="{StaticResource Heading2Text}" Text="Add an addon"
                            Margin="0,0,0,6"/>
                 <TextBlock Grid.Row="1" Style="{StaticResource MicroText}"
-                           Text="Paste a GitHub repo URL or a direct archive URL, or browse to a local .zip/.rar/.7z file."
+                           Text="Paste a GitHub repo URL, a Legacy-WoW or Warperia addon page URL, a direct archive URL, or browse to a local .zip/.rar/.7z file."
                            TextWrapping="Wrap" Margin="0,0,0,14"/>
 
                 <DockPanel Grid.Row="2">

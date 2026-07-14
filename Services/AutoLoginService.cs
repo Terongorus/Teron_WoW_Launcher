@@ -39,6 +39,20 @@ public sealed class AutoLoginService
     private const int PollIntervalMs = 200;
     private const int RequiredQuietSamples = 4;
 
+    /// <summary>Window-search + loading-settle budget for the native Direct3D9 renderer.</summary>
+    public const int DefaultTimeoutMs = 60000;
+
+    /// <summary>
+    /// Same budget, doubled — for use when a Direct3D9 hook/translation DLL (e.g. DXVK's d3d9.dll)
+    /// is injected. Such a layer has to stand up its own device/instance (a Vulkan instance and
+    /// device, in DXVK's case) before the game window appears, which can take noticeably longer
+    /// than the native renderer's near-instant device creation, especially on first run (shader/
+    /// pipeline cache still cold) or with a slower GPU driver. Without this, <see cref="WaitForGameWindow"/>
+    /// can hit its deadline before the window ever shows up, logging "game window not found before
+    /// timeout" for a launch that would have succeeded given a bit more patience.
+    /// </summary>
+    public const int ExtendedTimeoutMs = DefaultTimeoutMs * 2;
+
     private readonly Logger _log = Logger.Instance;
 
     public async Task PerformLoginAsync(
@@ -46,7 +60,7 @@ public sealed class AutoLoginService
         string account,
         string password,
         int delayMs,
-        int timeoutMs = 60000,
+        int timeoutMs = DefaultTimeoutMs,
         CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(account))

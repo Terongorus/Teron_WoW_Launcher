@@ -279,7 +279,7 @@ public sealed class AddonLibrary
                     continue;
                 }
 
-                if (!LooksLikeCommitSha(addon.RemoteVersionSignature))
+                if (addon.SourceKind == AddonSourceKind.GitHub && !LooksLikeCommitSha(addon.RemoteVersionSignature))
                 {
                     // One-time transition from the pre-git-clone signature format (a release tag, a
                     // "branch:name[@sha]" string, or simply null from an addon added before this
@@ -287,6 +287,13 @@ public sealed class AddonLibrary
                     // baseline instead of flagging every already-tracked addon as updatable the
                     // moment the signature format itself changes, with nothing about the addon
                     // actually different. Normal sha-vs-sha comparison takes over from here on.
+                    //
+                    // Scoped to GitHub specifically: every non-GitHub source's signature format
+                    // (size+ETag/Last-Modified style, see DirectArchiveAddonSource) never looks like a
+                    // 40-char commit sha, so without this scoping check every Archive-kind addon would
+                    // hit this branch on *every* check forever and never actually compare — silently
+                    // never detecting an update. Found while adding the Legacy-WoW/Warperia sources,
+                    // which would have inherited the same silent breakage.
                     addon.RemoteVersionSignature = latest;
                     addon.HasUpdateAvailable = false;
                     migrated = true;
