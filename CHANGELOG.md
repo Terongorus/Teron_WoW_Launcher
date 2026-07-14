@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [1.12.0] - 2026-07-15
+
+### Added
+
+- Legacy-WoW and Warperia addon page URLs are now supported as addon sources, alongside GitHub
+  and direct archive links — paste a `legacy-wow.com/vanilla-addons/...` or
+  `warperia.com/addon-vanilla/...` addon page and it installs and tracks for updates the same way.
+
+### Fixed
+
+- The realm-status dot no longer deletes a perfectly valid realm from history just because this
+  machine has no network connection at the moment (Wi-Fi down, cable unplugged, etc.). It now
+  shows a distinct "no network" indicator instead and leaves history untouched until a real check
+  can run.
+- Auto-login gives a Direct3D9 hook/translation layer (most commonly DXVK's `d3d9.dll`) extra time
+  to bring up its device and show the game window before giving up — previously a single fixed
+  timeout could log "game window not found" for a launch that just needed a few more seconds.
+- Addons whose real download resolves to a plain archive URL (not GitHub) — including the two new
+  sources above — now actually extract correctly; the destination folder was never being created
+  before handing it to the archive extractor, only working for local files added before this fix.
+- Update checks for any non-GitHub-sourced addon (direct archive, Legacy-WoW, Warperia) now
+  actually compare signatures instead of silently re-adopting the latest one as a new baseline on
+  every check, which meant those addons could never be flagged as updatable.
+
 ## [1.11.0] - 2026-07-12
 
 ### Added

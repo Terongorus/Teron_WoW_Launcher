@@ -107,7 +107,17 @@ public sealed class LaunchOrchestrator
         if (s.AutoLoginEnabled && !string.IsNullOrEmpty(s.Account))
         {
             string password = _settings.GetPassword();
-            await _autoLogin.PerformLoginAsync(result.ProcessId, s.Account, password, s.LoginDelayMs, ct: ct);
+
+            // A Direct3D9 hook/translation DLL (most commonly DXVK's d3d9.dll) can take noticeably
+            // longer than the native renderer to stand up its device and show the game window, since
+            // it's building its own instance/device (Vulkan, for DXVK) underneath first - give
+            // auto-login extra patience in that case instead of giving up early with "game window
+            // not found before timeout".
+            bool hasD3D9Hook = injectList.Any(path =>
+                string.Equals(Path.GetFileName(path), "d3d9.dll", StringComparison.OrdinalIgnoreCase));
+            int loginTimeoutMs = hasD3D9Hook ? AutoLoginService.ExtendedTimeoutMs : AutoLoginService.DefaultTimeoutMs;
+
+            await _autoLogin.PerformLoginAsync(result.ProcessId, s.Account, password, s.LoginDelayMs, loginTimeoutMs, ct);
         }
         else
         {

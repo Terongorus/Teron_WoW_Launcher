@@ -89,6 +89,7 @@ public partial class MainWindow : Window
     private static readonly Brush RealmOnlineBrush = new SolidColorBrush(Color.FromRgb(0x3B, 0x7D, 0x3B));
     private static readonly Brush RealmOfflineBrush = new SolidColorBrush(Color.FromRgb(0xB3, 0x3A, 0x3A));
     private static readonly Brush RealmUnknownBrush = new SolidColorBrush(Color.FromRgb(0x6A, 0x6A, 0x72));
+    private static readonly Brush RealmNetworkUnavailableBrush = new SolidColorBrush(Color.FromRgb(0xC9, 0x92, 0x2B));
 
     // "HEAD" resolves to whichever branch GitHub reports as the repo's default, so this always
     // reflects what's actually published there rather than a hardcoded branch name.
@@ -1355,31 +1356,41 @@ public partial class MainWindow : Window
             {
                 RealmStatus.Online => RealmOnlineBrush,
                 RealmStatus.Offline => RealmOfflineBrush,
+                RealmStatus.NetworkUnavailable => RealmNetworkUnavailableBrush,
                 _ => RealmUnknownBrush,
             };
             RealmlistStatusDot.ToolTip = status switch
             {
                 RealmStatus.Online => "Realm is up — auth server accepted a connection.",
                 RealmStatus.Offline => "Realm appears to be down — auth server refused the connection or timed out.",
+                RealmStatus.NetworkUnavailable => "No network connection detected — can't check realm status right now.",
                 _ when string.IsNullOrEmpty(realm) => "No realmlist set.",
                 _ => "Realm address doesn't resolve — check the realmlist for typos.",
             };
 
             // Only cache addresses that actually resolve (Online or Offline both mean "a real host");
-            // Unknown means DNS itself failed, so it's a typo'd/fake address that would just pollute
-            // the dropdown with junk the user never meant to keep. A real server that's just
-            // temporarily down still gets cached — the whole point is being able to switch back to it
-            // once it's back up. The mirror case: this same periodic check also catches a realm that
-            // used to resolve but no longer does (e.g. decommissioned) and prunes it back out, but
-            // only for whichever realm is currently active — a cached-but-unvisited entry elsewhere in
-            // the dropdown isn't re-checked until the user actually selects it.
-            if (status != RealmStatus.Unknown)
+            // Unknown means DNS itself gave a real "no such host" answer, so it's a typo'd/fake
+            // address that would just pollute the dropdown with junk the user never meant to keep. A
+            // real server that's just temporarily down still gets cached — the whole point is being
+            // able to switch back to it once it's back up. The mirror case: this same periodic check
+            // also catches a realm that used to resolve but no longer does (e.g. decommissioned) and
+            // prunes it back out, but only for whichever realm is currently active — a
+            // cached-but-unvisited entry elsewhere in the dropdown isn't re-checked until the user
+            // actually selects it.
+            //
+            // NetworkUnavailable deliberately touches history neither way: it means this machine
+            // couldn't even attempt the check (no local network path, or the DNS server itself was
+            // unreachable), which says nothing about whether the realm address is real — pruning it
+            // here is exactly the bug this status exists to avoid.
+            switch (status)
             {
-                RecordRealmlistHistory(realm);
-            }
-            else
-            {
-                RemoveRealmlistHistory(realm);
+                case RealmStatus.Online:
+                case RealmStatus.Offline:
+                    RecordRealmlistHistory(realm);
+                    break;
+                case RealmStatus.Unknown:
+                    RemoveRealmlistHistory(realm);
+                    break;
             }
         }
         finally

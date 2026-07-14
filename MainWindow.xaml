@@ -458,7 +458,7 @@
             <StackPanel>
               <TextBlock Style="{StaticResource Heading3Text}" Text="Addons (installed into Interface\AddOns)"/>
               <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,8"
-                         Text="Add by GitHub repo URL, a direct archive URL, or a local .zip/.rar/.7z file."/>
+                         Text="Add by GitHub repo URL, a Legacy-WoW or Warperia addon page URL, a direct archive URL, or a local .zip/.rar/.7z file."/>
 
               <Grid>
                 <Grid.ColumnDefinitions>

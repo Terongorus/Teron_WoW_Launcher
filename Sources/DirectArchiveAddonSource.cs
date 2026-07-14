@@ -39,6 +39,7 @@ public sealed class DirectArchiveAddonSource : IAddonSource
             }
 
             string contentDir = Path.Combine(Path.GetTempPath(), $"teronwow_addon_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(contentDir); // SharpCompress requires the destination to already exist
             ArchiveFactory.WriteToDirectory(archivePath, contentDir, new ExtractionOptions { ExtractFullPath = true, Overwrite = true });
 
             string name = Path.GetFileNameWithoutExtension(input);
