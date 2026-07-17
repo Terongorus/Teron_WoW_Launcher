@@ -25,6 +25,20 @@
         -->
         <FontFamily x:Key="AppFontFamily">Segoe UI</FontFamily>
 
+        <!--
+          The app's action-color palette, one brush per verb, shared by every Add/Install/Update/
+          Remove icon button across every tab (DLLs, MPQ Patches, Addons Installed, Addons Browse)
+          plus the Play button's own state colors (MainWindow.xaml.cs) — same four values, kept as
+          separate C# constants there rather than pulled from here, since the Play button predates
+          this shared-resource set and already worked correctly; these exist so every *other* button
+          has one place to reference instead of each one hardcoding its own hex string (which is
+          exactly how Add/Update/Remove buttons ended up inconsistent - see issue #14).
+        -->
+        <SolidColorBrush x:Key="AddActionBrush" Color="#3B7D3B"/>
+        <SolidColorBrush x:Key="InstallActionBrush" Color="#2E6DA4"/>
+        <SolidColorBrush x:Key="UpdateActionBrush" Color="#C9922B"/>
+        <SolidColorBrush x:Key="RemoveActionBrush" Color="#A83A3A"/>
+
         <Style x:Key="Heading1Text" TargetType="{x:Type TextBlock}">
             <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
             <Setter Property="FontSize" Value="30"/>
@@ -463,6 +477,15 @@
                             <Trigger Property="IsEditable" Value="True">
                                 <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible"/>
                             </Trigger>
+                            <!-- The missing half of the above: ContentSite (showing SelectionBoxItem)
+                                 starts Collapsed and nothing ever un-collapsed it for the non-editable
+                                 case - this template was only ever exercised with IsEditable="True"
+                                 (the Realmlist history dropdown) until the Marketplace browser's plain
+                                 (non-editable) ComboBoxes hit this latent gap and rendered completely
+                                 blank, selected item and all. -->
+                            <Trigger Property="IsEditable" Value="False">
+                                <Setter TargetName="ContentSite" Property="Visibility" Value="Visible"/>
+                            </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Bd" Property="BorderBrush" Value="#5E5E6A"/>
                             </Trigger>
@@ -516,7 +539,21 @@
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="6" SnapsToDevicePixels="True">
-                            <ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}">
+                            <!-- These three TemplateBindings were missing entirely, so setting
+                                 ScrollViewer.VerticalScrollBarVisibility/CanContentScroll on any
+                                 ListBox instance silently did nothing - this inner ScrollViewer just
+                                 used its own defaults (Visible, CanContentScroll=False) regardless.
+                                 Never surfaced before because every existing ListBox (AddonList,
+                                 IgnoredDllList, etc.) either sits inside its own outer ScrollViewer
+                                 with unconstrained height (nothing to scroll internally, so a stray
+                                 Visible scrollbar never showed) or never overflows in the first place -
+                                 the Marketplace Browse list is the first one that's both genuinely
+                                 height-constrained and needs its internal scrollbar hidden/its
+                                 VirtualizingStackPanel to actually virtualize. -->
+                            <ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}"
+                                          CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}"
+                                          VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}"
+                                          HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}">
                                 <ItemsPresenter/>
                             </ScrollViewer>
                         </Border>

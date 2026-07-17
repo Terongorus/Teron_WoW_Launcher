@@ -22,8 +22,8 @@
     <Product>Teron WoW Launcher (TWL)</Product>
     <Company>Teronverse</Company>
     <Authors>Kaloyan Kolev</Authors>
-    <Version>1.12.0</Version>
-    <!-- Keep AssemblyInformationalVersion clean ("1.12.0", not "1.12.0+<gitsha>"). -->
+    <Version>2.0.0-beta.1</Version>
+    <!-- Keep AssemblyInformationalVersion clean ("2.0.0-beta.1", not "2.0.0-beta.1+<gitsha>"). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 
     <!-- Shown in Explorer/taskbar/Alt+Tab (and used as MainWindow's own icon below, since the
@@ -88,7 +88,10 @@
       <InnoSetupCompiler Condition="'$(InnoSetupCompiler)' == '' AND Exists('$(ProgramFiles)\Inno Setup 6\ISCC.exe')">$(ProgramFiles)\Inno Setup 6\ISCC.exe</InnoSetupCompiler>
     </PropertyGroup>
 
-    <Exec Command="&quot;$(InnoSetupCompiler)&quot; /DMyAppVersion=$(FileVersion) &quot;$(MSBuildProjectDirectory)\Installer\TeronWoWLauncher.iss&quot;"
+    <!-- $(Version), not $(FileVersion): FileVersion is MSBuild's auto-padded 4-part numeric form
+         (e.g. "2.0.0.0" from a "2.0.0-beta.1" Version) - passing that here used to make the
+         installer's AppVersion/title bar show the padded 4-digit form instead of the real one. -->
+    <Exec Command="&quot;$(InnoSetupCompiler)&quot; /DMyAppVersion=$(Version) &quot;$(MSBuildProjectDirectory)\Installer\TeronWoWLauncher.iss&quot;"
           Condition="'$(RuntimeIdentifier)' == 'win-x86' AND '$(SelfContained)' == 'true' AND '$(InnoSetupCompiler)' != ''" />
     <Warning Text="Inno Setup (ISCC.exe) was not found in the usual install locations; skipping installer build. Install it with 'winget install JRSoftware.InnoSetup' to enable this step."
               Condition="'$(RuntimeIdentifier)' == 'win-x86' AND '$(SelfContained)' == 'true' AND '$(InnoSetupCompiler)' == ''" />

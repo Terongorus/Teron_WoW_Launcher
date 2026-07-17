@@ -5,6 +5,93 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [2.0.0-beta.1] - 2026-07-17
+
+### Added
+
+- Addons tab gained a Browse sub-toggle alongside Installed: search and filter Legacy-WoW's full
+  addon catalog (~700 entries, by category) and Warperia's paginated catalog directly inside the
+  launcher, view each addon's own description page, and install straight from the browse results
+  using the same install path as pasting a URL manually.
+- The launcher now supports multiple WoW installations: a quick-switch dropdown on the Home tab
+  lists every installation directory you've ever pointed it at, and switching one loads that
+  directory's own account, realmlist, tweaks, patches, DLLs, and addons instead of sharing one
+  global set across every folder. If a previously-configured directory no longer exists on disk,
+  the launcher now falls back to the most recently used surviving one automatically, with a clear
+  warning instead of silently failing.
+- The launcher's own location is no longer tied to any WoW installation — it can live anywhere
+  and simply points at whichever game folder(s) you configure, instead of assuming it's installed
+  inside one.
+- Installing over an existing, already-up-to-date 1.12.1 client now adopts it in place instead of
+  blindly re-downloading and overwriting it.
+- The launcher now checks GitHub on startup for a newer stable release and offers to update:
+  confirm the prompt and it downloads the installer, verifies it against the release's own
+  published checksum, then launches it and closes itself so the update can proceed.
+- A "what's new" summary now shows once, automatically, the first time you run the launcher after
+  it's updated to a new version.
+- Client download/install/update/repair, extraction, and the launcher's own self-update download
+  now all show a real progress percentage, transfer speed, and estimated time remaining, instead
+  of a generic spinner that gave no sense of how long an install or extraction would actually
+  take.
+- Canceling an in-progress download now asks for confirmation first, instead of stopping
+  immediately on a single click.
+- The installer now offers a Start Menu shortcut checkbox alongside the existing desktop shortcut
+  one, so either can be turned off independently instead of always creating a Start Menu entry.
+
+### Changed
+
+- Reorganized every service class into namespaced subfolders (`Services/Addons`, `Services/Core`,
+  `Services/Dlls`, `Services/Launch`, `Services/Patching`, `Services/UI`) instead of one flat
+  `Services` folder — no behavior change, purely internal organization.
+- Addon installs — copying a multi-folder local addon, extracting a downloaded archive, and
+  copying a GitHub/GitLab-tracked addon's working tree — now run on a background thread instead
+  of freezing the launcher window for the duration, matching the client installer's own behavior.
+- A fresh WoW installation directory now starts with every Tweaks-tab patch unchecked, rather than
+  silently inheriting whichever ones happened to be enabled by default — each installation's
+  settings are fully independent (see multi-installation support above).
+- Home tab's Client Path, Realm, and Login sections now sit in that fixed order with even spacing
+  between them that scales with the window instead of using mismatched fixed-pixel gaps.
+
+### Fixed
+
+- Non-editable dropdowns (used by the new addon Browse category filter) rendered with invisible
+  selected-item text; a shared style trigger only ever handled the editable case used by the
+  Realmlist history dropdown.
+- Height-constrained lists (used by Browse's results) could ignore their own scrollbar visibility
+  and horizontal-scroll settings, letting long addon names/descriptions run off the side instead
+  of wrapping.
+- A shared scrollbar between the Installed and Browse sub-tabs stayed visible even while its own
+  sub-tab wasn't the active one.
+- Switching from a long addon list to a much shorter one (e.g. changing a Browse filter) could
+  leave the list scrolled partway down instead of resetting to the top.
+- Loading the addon Browse tab no longer fires a thumbnail/detail fetch for every single entry at
+  once (noticeable stutter on Legacy-WoW's ~700-entry catalog) — only rows actually scrolled into
+  view are fetched.
+- Warperia addon installs failed every time with a decoding error, because the site's download
+  token is base64 without padding and .NET's decoder requires it; the token is now padded before
+  decoding.
+- Extended the client installer's zip-slip path-traversal guard to addon archive installs as well
+  (a maliciously crafted addon archive could otherwise have written outside the intended addon
+  folder) — addon sources are third-party content and deserve at least the same guard as the
+  launcher's own client download.
+- The startup addon refresh (and manual Refresh) could crash the whole launcher on an unexpected
+  error with nothing catching it; it now logs and shows a toast instead.
+- Adding an addon whose source download itself fails is now handled by the add flow directly
+  rather than depending on whichever caller happens to wrap it.
+- A normal client download no longer double-checks the remote version a second time after already
+  confirming it during the download step.
+- The launcher no longer leaves a temporary installer folder behind under `%TEMP%` after every
+  self-update — stale ones from previous updates are now swept automatically on the next check.
+- The addon marketplace cache loader now tolerates any read/parse failure instead of only a
+  malformed-JSON one, falling back to a fresh fetch either way.
+- The auto-update checker's version comparison couldn't parse a running pre-release version (e.g.
+  this beta), which would have silently disabled update checking entirely for anyone on a beta
+  build; it now strips the pre-release suffix before comparing, so a beta install can still
+  correctly detect a newer stable release.
+- The installer's title bar/version display showed a padded four-part version number (e.g.
+  "1.12.0.0") instead of the real three-part one, because the build passed MSBuild's auto-padded
+  `FileVersion` to the installer script instead of the project's actual `Version` string.
+
 ## [1.12.0] - 2026-07-15
 
 ### Added

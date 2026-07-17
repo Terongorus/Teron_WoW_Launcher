@@ -4,7 +4,9 @@ using Microsoft.Win32;
 
 namespace TeronWoWLauncher.Dialogs;
 
-/// <summary>Prompts for the folder to install the vanilla client into, defaulting to the launcher's own folder.</summary>
+/// <summary>Prompts for the folder to install the vanilla client into, defaulting to whatever game
+/// folder (if any) is already configured — never the launcher's own folder, which has no relation to
+/// any WoW installation.</summary>
 public partial class InstallDialog : Window
 {
     public string SelectedFolder { get; private set; } = string.Empty;

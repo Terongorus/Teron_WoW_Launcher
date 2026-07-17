@@ -77,7 +77,12 @@ public sealed class WarperiaAddonSource : IAddonSource
 
         try
         {
-            byte[] bytes = Convert.FromBase64String(match.Groups["token"].Value);
+            // The site emits this attribute without padding (observed length not a multiple of 4) -
+            // Convert.FromBase64String is strict about padding and throws on it as-is, so pad it back
+            // out ourselves before decoding rather than assuming the token itself is malformed.
+            string token = match.Groups["token"].Value;
+            string padded = token.PadRight(token.Length + (4 - token.Length % 4) % 4, '=');
+            byte[] bytes = Convert.FromBase64String(padded);
             string tokenUrl = Encoding.UTF8.GetString(bytes);
             if (!Uri.TryCreate(tokenUrl, UriKind.Absolute, out Uri? uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
             {

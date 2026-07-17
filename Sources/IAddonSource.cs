@@ -42,6 +42,7 @@ public sealed class AddonSourceResolver
     private readonly IAddonSource[] _sources =
     {
         new GitHubAddonSource(),
+        new GitLabAddonSource(),
         new LegacyWowAddonSource(),
         new WarperiaAddonSource(),
         new DirectArchiveAddonSource(), // fallback, must stay last

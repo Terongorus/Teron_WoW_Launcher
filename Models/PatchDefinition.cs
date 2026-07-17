@@ -62,7 +62,6 @@ public sealed class PatchDefinition
     public required string Name { get; init; }
     public required string Description { get; init; }
     public required PatchCategory Category { get; init; }
-    public bool DefaultEnabled { get; init; }
 
     /// <summary>Non-null when the patch exposes a numeric value to the user.</summary>
     public PatchParameter? Parameter { get; init; }

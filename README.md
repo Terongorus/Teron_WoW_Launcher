@@ -11,11 +11,15 @@ Point it at your WoW folder (or let it install the client for you), hit **Play**
 the executable, injects your DLLs, launches the game, and logs you in — in that order, every
 time, automatically skipping anything that hasn't changed since last time. The launcher steps back
 out of your way once the game is up, and comes back to the front on its own the moment you close it.
+It doesn't need to live inside any WoW folder itself, and it can manage more than one installation
+at once — switch between them from a dropdown on the Home tab, and each one keeps its own account,
+realmlist, tweaks, patches, DLLs, and addons.
 
 ## Getting started
 
-1. Place the launcher in (or point it at, from the **Settings** tab) your World of Warcraft
-   folder — the one with `WoW.exe` in it.
+1. Point the launcher at a World of Warcraft folder — the one with `WoW.exe` in it — from the
+   Home tab's directory selector (or **Settings**). It can live anywhere on disk; it doesn't need
+   to be inside that folder.
 2. On the **Home** tab, set your realmlist (top-right link, or via Settings), and optionally your
    account and password if you want to log in automatically.
 3. Hit the big button in the bottom-right corner. If there's no client yet, it reads **Install** —
@@ -37,7 +41,10 @@ non-English layout can't garble your password) and waits for the client to actua
 loading before it types, instead of guessing a fixed delay. The Realmlist label carries a live
 status dot — green when the auth server accepts a connection, red when a real host refuses or
 times out, gray when the address doesn't even resolve — and the field itself remembers every
-realm you've actually connected to, offered back as a history dropdown.
+realm you've actually connected to, offered back as a history dropdown. A directory dropdown lets
+you manage more than one WoW installation from the same launcher — pick a folder you haven't used
+before and it's added to the list; switching to a different one loads that installation's own
+account, realmlist, tweaks, patches, DLLs, and addons.
 
 ### Tweaks
 
@@ -68,8 +75,10 @@ deleted). Blizzard's own base-game archives are never shown or touched.
 
 Install addons the way that's actually convenient: paste a GitHub repo link, a Legacy-WoW or
 Warperia addon page link, a direct archive URL, or point at a `.zip`/`.rar`/`.7z` you already
-downloaded. Addon names render with their real in-game color codes, and versions come straight
-from each addon's own `.toc` file rather than a
+downloaded — or switch to the **Browse** sub-tab to search Legacy-WoW's and Warperia's full addon
+catalogs right inside the launcher, read each addon's own description, and install it in one click
+without ever leaving the app. Addon names render with their real in-game color codes, and versions
+come straight from each addon's own `.toc` file rather than a
 GitHub release tag. Hitting **Refresh** does everything at once — checks every tracked addon for
 updates, and picks up any folder you dropped into `Interface\AddOns` by hand, prompting you before
 adopting anything that might conflict with what's already tracked. This same check also runs once
@@ -102,6 +111,13 @@ installs — for when something doesn't go as expected and you want to see exact
 Entries are color-coded by severity, and Clear, Copy, and Open Folder actions are right there on
 the tab.
 
+## Staying up to date
+
+The launcher checks GitHub on startup for a newer stable release. If one's available, confirming
+the prompt downloads the installer, verifies it against the release's own published checksum, and
+launches it, closing the launcher so the update can proceed. The first time you run a version
+after updating, a "what's new" summary of that version's changes shows once automatically.
+
 ## Requirements
 
 - Windows, with the [.NET 10 desktop runtime](https://dotnet.microsoft.com/download/dotnet/10.0)
@@ -131,7 +147,7 @@ own code.
 
 ## Project status
 
-Version 1.12.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
+Version 2.0.0-beta.1. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
 ## License

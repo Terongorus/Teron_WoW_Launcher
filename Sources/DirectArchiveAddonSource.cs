@@ -40,7 +40,13 @@ public sealed class DirectArchiveAddonSource : IAddonSource
 
             string contentDir = Path.Combine(Path.GetTempPath(), $"teronwow_addon_{Guid.NewGuid():N}");
             Directory.CreateDirectory(contentDir); // SharpCompress requires the destination to already exist
-            ArchiveFactory.WriteToDirectory(archivePath, contentDir, new ExtractionOptions { ExtractFullPath = true, Overwrite = true });
+
+            // Off the calling thread deliberately - archive extraction is synchronous SharpCompress
+            // I/O with no await in it, and DownloadAsync is always awaited directly from the UI thread
+            // (AddonLibrary.AddAsync, itself called from MainWindow's UI thread) - a large archive
+            // would otherwise noticeably freeze the window, the same bug class already fixed for the
+            // client zip's own extraction.
+            await Task.Run(() => ExtractArchive(archivePath, contentDir), ct);
 
             string name = Path.GetFileNameWithoutExtension(input);
             return new AddonDownload(contentDir, name, signature, AddonSourceKind.Archive, input);
@@ -48,6 +54,42 @@ public sealed class DirectArchiveAddonSource : IAddonSource
         finally
         {
             try { File.Delete(archivePath); } catch { /* temp cleanup best-effort */ }
+        }
+    }
+
+    /// <summary>
+    /// Extracts every entry individually (rather than the ArchiveFactory.WriteToDirectory convenience
+    /// method) specifically so each one can be checked against Zip Slip - a malicious or corrupted
+    /// archive entry like "../../../Windows/System32/evil.dll" would otherwise extract outside
+    /// contentDir. This matters more here than for the launcher's own client zip: an addon archive is
+    /// arbitrary third-party content (GitHub/Warperia/LegacyWoW/a raw URL/a local file the user
+    /// picked), not a single hardcoded trusted source.
+    /// </summary>
+    private static void ExtractArchive(string archivePath, string contentDir)
+    {
+        string contentDirFull = Path.GetFullPath(contentDir);
+        if (!contentDirFull.EndsWith(Path.DirectorySeparatorChar))
+        {
+            contentDirFull += Path.DirectorySeparatorChar;
+        }
+
+        using IArchive archive = ArchiveFactory.OpenArchive(archivePath);
+        foreach (IArchiveEntry entry in archive.Entries)
+        {
+            if (entry.IsDirectory || entry.Key is null)
+            {
+                continue;
+            }
+
+            string destFull = Path.GetFullPath(Path.Combine(contentDir, entry.Key));
+            if (!destFull.StartsWith(contentDirFull, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Refusing to extract '{entry.Key}' — its path resolves outside the destination folder.");
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(destFull)!);
+            entry.WriteToFile(destFull, new ExtractionOptions { Overwrite = true });
         }
     }
 

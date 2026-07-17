@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -24,7 +25,12 @@ using Microsoft.Win32;
 using TeronWoWLauncher.Dialogs;
 using TeronWoWLauncher.Models;
 using TeronWoWLauncher.Native;
-using TeronWoWLauncher.Services;
+using TeronWoWLauncher.Services.Addons;
+using TeronWoWLauncher.Services.Core;
+using TeronWoWLauncher.Services.Dlls;
+using TeronWoWLauncher.Services.Launch;
+using TeronWoWLauncher.Services.Patching;
+using TeronWoWLauncher.Services.UI;
 
 namespace TeronWoWLauncher;
 
@@ -34,6 +40,7 @@ public partial class MainWindow : Window
 
     private readonly Logger _log = Logger.Instance;
     private readonly SettingsService _settings = new();
+    private readonly DirectorySettingsService _dirSettings = new();
     private readonly LaunchOrchestrator _orchestrator;
     private readonly DllListService _dlls = new();
     private readonly MpqPatchService _mpq = new();
@@ -43,6 +50,8 @@ public partial class MainWindow : Window
     private readonly GameProcessService _processCheck = new();
     private readonly GameCacheService _gameCache = new();
     private readonly AddonLibrary _addons = new();
+    private readonly LauncherUpdateService _launcherUpdate = new();
+    private readonly MarketplaceService _marketplace = new();
 
     private readonly List<PatchControl> _patchControls = new();
     private readonly ObservableCollection<DllInfo> _dllItems = new();
@@ -51,6 +60,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<InstalledAddon> _addonItems = new();
     private readonly ObservableCollection<LogEntry> _logItems = new();
     private readonly ObservableCollection<string> _realmlistHistoryItems = new();
+    private readonly ObservableCollection<string> _managedDirectoryItems = new();
 
     private readonly DispatcherTimer _patchApplyTimer = new() { Interval = TimeSpan.FromMilliseconds(600) };
     private readonly DispatcherTimer _settingsSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
@@ -62,6 +72,10 @@ public partial class MainWindow : Window
     private bool _savingSettings;
     private bool _addonBusy;
     private bool _launchOperationBusy;
+    private CancellationTokenSource? _downloadCts;
+    private bool _downloadSupportsPauseResume;
+    private bool _downloadPaused;
+    private (string TargetDir, string SuccessMessage, string FailureMessage, Brush Color)? _pausedDownloadParams;
     private bool _wowAlreadyRunning;
     private int? _launchedGameProcessId;
 
@@ -124,8 +138,24 @@ public partial class MainWindow : Window
         Closing += OnWindowClosing;
 
         _settings.Load();
+
+        // The configured directory may have been deleted/moved since the last run - fall back to the
+        // most-recently-used OTHER managed directory that still exists, rather than leaving the UI
+        // pointed at a dead path with no clear next step. Visible (a toast once the window is up), not
+        // silent - a directory switching under the user without them noticing is exactly the kind of
+        // surprise that caused real problems earlier this project.
+        string? deadWowDir = _settings.Current.WowDirectory;
+        string? fallbackWowDir = TryResolveFallbackDirectory();
+        if (fallbackWowDir is not null)
+        {
+            _settings.Current.WowDirectory = fallbackWowDir;
+            _settings.Save();
+        }
+
+        _dirSettings.Load(_settings.ResolveWowDirectory());
+        RecordManagedDirectory(_settings.ResolveWowDirectory());
         RestoreWindowPlacement();
-        _orchestrator = new LaunchOrchestrator(_settings);
+        _orchestrator = new LaunchOrchestrator(_settings, _dirSettings);
         _log.MessageLogged += OnMessageLogged;
         _patchApplyTimer.Tick += OnPatchApplyTick;
         _settingsSaveTimer.Tick += OnSettingsSaveTick;
@@ -140,6 +170,7 @@ public partial class MainWindow : Window
         IgnoredDllList.ItemsSource = _ignoredDllItems;
         LogList.ItemsSource = _logItems;
         RealmlistBox.ItemsSource = _realmlistHistoryItems;
+        DirectorySwitchBox.ItemsSource = _managedDirectoryItems;
 
         // Save on any change instead of a Save button — CollectSettingsFromUi() validates each field
         // (bad numbers/URLs keep the last good value) before anything is persisted.
@@ -164,7 +195,6 @@ public partial class MainWindow : Window
         MinimizeOnLaunchCheck.Unchecked += (_, _) => ScheduleSettingsSave();
 
         _loading = true;
-        BuildPatchList();
         LoadSettingsIntoUi();
         RefreshDllList();
         RefreshDetectedDlls();
@@ -174,10 +204,19 @@ public partial class MainWindow : Window
         _loading = false;
 
         _lastAppliedWowDir = CurrentWowDir();
-        _lastAppliedRealmlist = _settings.Current.Realmlist;
+        _lastAppliedRealmlist = _dirSettings.Current.Realmlist;
         _lastAppliedClientUrl = CurrentClientUrl();
 
-        UpdateStatus("Ready.");
+        if (fallbackWowDir is not null)
+        {
+            ShowGlobalToast($"'{deadWowDir}' no longer exists — switched to '{fallbackWowDir}'.", ToastSeverity.Warning);
+            _log.Warn($"Configured WoW directory '{deadWowDir}' no longer exists; fell back to managed directory '{fallbackWowDir}'.");
+        }
+        else
+        {
+            ShowGlobalToast("Ready.", ToastSeverity.Info);
+        }
+
         _log.Info("Launcher UI initialized.");
 
         _ = RefreshPlayButtonStateAsync();
@@ -192,6 +231,10 @@ public partial class MainWindow : Window
         // user having to remember to click it. DLL "detected" and MPQ patch scans already happen above
         // (RefreshDetectedDlls/RefreshMpqList), since re-scanning those doesn't need a shown Owner.
         Loaded += (_, _) => _ = RefreshAddonsAsync();
+
+        // "What's new" (if the version changed since last run) and the launcher's own update check,
+        // in that order - see CheckForLauncherUpdateAsync's own doc comment for why sequential.
+        Loaded += (_, _) => _ = CheckForLauncherUpdateAsync();
     }
 
     // ---------------- Custom title bar ----------------
@@ -416,13 +459,13 @@ public partial class MainWindow : Window
         _patchControls.Clear();
 
         IReadOnlyList<PatchDefinition> catalog = PatchCatalog.All;
-        bool firstRun = _settings.Current.EnabledPatchIds.Count == 0;
 
         foreach (PatchDefinition patch in catalog)
         {
-            bool isChecked = firstRun
-                ? patch.DefaultEnabled
-                : _settings.Current.EnabledPatchIds.Contains(patch.Id);
+            // No DefaultEnabled fallback here - a fresh directory with no recorded selection starts
+            // with every tweak unchecked, full stop (a new WoW install shouldn't silently inherit
+            // whatever a different installation happened to have enabled).
+            bool isChecked = _dirSettings.Current.EnabledPatchIds.Contains(patch.Id);
 
             var box = new CheckBox { Content = patch.Name, IsChecked = isChecked };
             box.Click += (_, _) => { SchedulePatchApply(); RefreshSignatureMpqWarning(); };
@@ -440,7 +483,7 @@ public partial class MainWindow : Window
             if (patch.Parameter is PatchParameter p)
             {
                 double value = p.Default;
-                if (_settings.Current.PatchParameters.TryGetValue(patch.Id, out double stored))
+                if (_dirSettings.Current.PatchParameters.TryGetValue(patch.Id, out double stored))
                 {
                     // One-time migration: FoV used to be stored (and edited) in radians; a leftover
                     // radians value will always be well under the new degrees-based minimum.
@@ -544,7 +587,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void RefreshSignatureMpqWarning()
     {
-        bool signatureRemovalEnabled = _settings.Current.EnabledPatchIds.Contains("signature-removal");
+        bool signatureRemovalEnabled = _dirSettings.Current.EnabledPatchIds.Contains("signature-removal");
         int activeMpqCount = _mpq.Scan(CurrentWowDir()).Count(p => p.Enabled);
         bool atRisk = !signatureRemovalEnabled && activeMpqCount > 0;
 
@@ -577,6 +620,7 @@ public partial class MainWindow : Window
 
         CollectSettingsFromUi();
         _settings.Save();
+        _dirSettings.Save(CurrentWowDir());
         _patchApplyTimer.Stop();
         _patchApplyTimer.Start();
     }
@@ -584,20 +628,37 @@ public partial class MainWindow : Window
     private async void OnPatchApplyTick(object? sender, EventArgs e)
     {
         _patchApplyTimer.Stop();
-        if (_applyingPatches)
+
+        // MainProgressBar/ProgressStatusText are shared with the client download/repair/update flow,
+        // the launcher self-update download, and the startup backup-integrity check - all of which
+        // set Visibility=Visible synchronously the moment they start. If any of those is already
+        // showing the bar, barging in here would show/collapse it independently of whichever of those
+        // is still actually running, hiding the bar out from under it while its own progress text and
+        // Pause/Cancel buttons (untouched by this method) keep updating - reschedule instead and let
+        // whichever operation currently owns the bar finish first.
+        if (_applyingPatches || MainProgressBar.Visibility == Visibility.Visible)
         {
             _patchApplyTimer.Start();
             return;
         }
 
         _applyingPatches = true;
+        MainProgressBar.Visibility = Visibility.Visible;
+        MainProgressBar.IsIndeterminate = true;
+        MainProgressBar.Foreground = PlayColor;
         try
         {
-            await _orchestrator.ApplyPatchesAsync(new Progress<string>(UpdateStatus));
+            // Attached directly to the bar (ProgressStatusText), not a toast - same reasoning as
+            // the client download's progress narration: this reports repeatedly during one rebuild,
+            // and re-showing a toast on every message made a just-closed one reopen moments later.
+            await _orchestrator.ApplyPatchesAsync(new Progress<string>(msg => ProgressStatusText.Text = msg));
         }
         finally
         {
             _applyingPatches = false;
+            MainProgressBar.Visibility = Visibility.Collapsed;
+            MainProgressBar.IsIndeterminate = false;
+            ProgressStatusText.Text = string.Empty;
         }
     }
 
@@ -622,7 +683,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _log.Error("Failed to save dlls.txt.", ex);
-            UpdateStatus("Failed to save the DLL list — see the Log tab.");
+            ShowTabToast("Failed to save the DLL list — see the Log tab.", ToastSeverity.Error);
         }
     }
 
@@ -652,6 +713,11 @@ public partial class MainWindow : Window
             _dllItems.Add(DllMetadataReader.Read(entry, chosen));
             SaveDllList();
             RefreshDetectedDlls();
+            ShowTabToast($"Added {Path.GetFileName(entry)}.", ToastSeverity.Success);
+        }
+        else
+        {
+            ShowTabToast($"{Path.GetFileName(entry)} is already tracked.", ToastSeverity.Info);
         }
     }
 
@@ -662,6 +728,7 @@ public partial class MainWindow : Window
             _dllItems.Remove(item);
             SaveDllList();
             RefreshDetectedDlls();
+            ShowTabToast($"Removed {item.Name}.", ToastSeverity.Success);
         }
     }
 
@@ -687,7 +754,7 @@ public partial class MainWindow : Window
     {
         string wowDir = CurrentWowDir();
         _detectedDllItems.Clear();
-        foreach (string name in _dlls.ScanForUntrackedDlls(wowDir, _settings.Current.IgnoredDetectedDlls))
+        foreach (string name in _dlls.ScanForUntrackedDlls(wowDir, _dirSettings.Current.IgnoredDetectedDlls))
         {
             _detectedDllItems.Add(DllMetadataReader.Read(name, Path.Combine(wowDir, name)));
         }
@@ -723,7 +790,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        List<string> ignored = _settings.Current.IgnoredDetectedDlls;
+        List<string> ignored = _dirSettings.Current.IgnoredDetectedDlls;
         foreach (DllInfo item in selected)
         {
             if (!ignored.Contains(item.Name, StringComparer.OrdinalIgnoreCase))
@@ -732,7 +799,7 @@ public partial class MainWindow : Window
             }
         }
 
-        _settings.Save();
+        _dirSettings.Save(CurrentWowDir());
         RefreshDetectedDlls();
         RefreshIgnoredDllList();
     }
@@ -742,7 +809,7 @@ public partial class MainWindow : Window
     private void RefreshIgnoredDllList()
     {
         _ignoredDllItems.Clear();
-        foreach (string name in _settings.Current.IgnoredDetectedDlls.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+        foreach (string name in _dirSettings.Current.IgnoredDetectedDlls.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
         {
             _ignoredDllItems.Add(name);
         }
@@ -758,23 +825,23 @@ public partial class MainWindow : Window
 
         foreach (string name in selected)
         {
-            _settings.Current.IgnoredDetectedDlls.RemoveAll(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase));
+            _dirSettings.Current.IgnoredDetectedDlls.RemoveAll(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase));
         }
 
-        _settings.Save();
+        _dirSettings.Save(CurrentWowDir());
         RefreshIgnoredDllList();
         RefreshDetectedDlls();
     }
 
     private void OnUnignoreAllDlls(object sender, RoutedEventArgs e)
     {
-        if (_settings.Current.IgnoredDetectedDlls.Count == 0)
+        if (_dirSettings.Current.IgnoredDetectedDlls.Count == 0)
         {
             return;
         }
 
-        _settings.Current.IgnoredDetectedDlls.Clear();
-        _settings.Save();
+        _dirSettings.Current.IgnoredDetectedDlls.Clear();
+        _dirSettings.Save(CurrentWowDir());
         RefreshIgnoredDllList();
         RefreshDetectedDlls();
     }
@@ -808,11 +875,12 @@ public partial class MainWindow : Window
                 Content = "", // Segoe Fluent Icons: Delete
                 Width = 28,
                 Height = 28,
+                Background = (Brush)FindResource("RemoveActionBrush"),
                 ToolTip = "Remove this patch",
             };
             remove.Click += (_, _) =>
             {
-                RunMpqOperation(() => _mpq.Remove(wowDir, patch), $"remove patch {patch.Letter}");
+                RunMpqOperation(() => _mpq.Remove(wowDir, patch), $"remove patch {patch.Letter}", $"Removed patch {patch.Letter}.");
                 RefreshMpqList();
             };
             DockPanel.SetDock(remove, Dock.Right);
@@ -827,7 +895,8 @@ public partial class MainWindow : Window
             };
             check.Click += (_, _) =>
             {
-                RunMpqOperation(() => _mpq.SetEnabled(wowDir, patch, check.IsChecked == true), $"toggle patch {patch.Letter}");
+                RunMpqOperation(() => _mpq.SetEnabled(wowDir, patch, check.IsChecked == true), $"toggle patch {patch.Letter}",
+                    $"Patch {patch.Letter} {(check.IsChecked == true ? "enabled" : "disabled")}.");
                 RefreshMpqList();
             };
             row.Children.Add(check);
@@ -850,7 +919,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        RunMpqOperation(() => _mpq.Add(CurrentWowDir(), dialog.FileName), "add the MPQ patch");
+        RunMpqOperation(() => _mpq.Add(CurrentWowDir(), dialog.FileName), "add the MPQ patch", "Added the MPQ patch.");
         RefreshMpqList();
     }
 
@@ -869,29 +938,48 @@ public partial class MainWindow : Window
     private void SetAllMpqEnabled(bool enabled)
     {
         string wowDir = CurrentWowDir();
+        int count = 0;
         foreach (MpqPatch patch in _mpq.Scan(wowDir))
         {
-            RunMpqOperation(() => _mpq.SetEnabled(wowDir, patch, enabled), $"toggle patch {patch.Letter}");
+            // No per-patch successMessage here deliberately - one toast per patch in this loop would
+            // flood the 5-slot tab-toast stack; a single summary toast after the loop is enough.
+            if (RunMpqOperation(() => _mpq.SetEnabled(wowDir, patch, enabled), $"toggle patch {patch.Letter}"))
+            {
+                count++;
+            }
         }
 
         RefreshMpqList();
+        if (count > 0)
+        {
+            ShowTabToast($"{(enabled ? "Enabled" : "Disabled")} {count} patch(es).", ToastSeverity.Success);
+        }
     }
 
     /// <summary>
     /// Runs an MPQ file operation (rename/copy/delete under Data\), reporting failure instead of
     /// letting it throw unhandled from a button click — the Data folder can be locked by a running
-    /// game or antivirus scan at the exact moment the user clicks.
+    /// game or antivirus scan at the exact moment the user clicks. Returns whether it succeeded, and
+    /// optionally shows a success toast (omit for callers looping over many patches at once - see
+    /// SetAllMpqEnabled, which shows one summary toast instead of one per iteration).
     /// </summary>
-    private void RunMpqOperation(Action action, string failureContext)
+    private bool RunMpqOperation(Action action, string failureContext, string? successMessage = null)
     {
         try
         {
             action();
+            if (successMessage is not null)
+            {
+                ShowTabToast(successMessage, ToastSeverity.Success);
+            }
+
+            return true;
         }
         catch (Exception ex)
         {
             _log.Error($"Failed to {failureContext}.", ex);
-            UpdateStatus($"Failed to {failureContext} — see the Log tab.");
+            ShowTabToast($"Failed to {failureContext} — see the Log tab.", ToastSeverity.Error);
+            return false;
         }
     }
 
@@ -899,7 +987,7 @@ public partial class MainWindow : Window
 
     private void InitAddonsTab()
     {
-        _addons.Load();
+        _addons.Load(CurrentWowDir());
         AddonList.ItemsSource = _addonItems;
         CollectionViewSource.GetDefaultView(_addonItems).Filter = FilterAddonRow;
         RefreshAddonList();
@@ -976,6 +1064,10 @@ public partial class MainWindow : Window
         }
     }
 
+    // AddAddonAsync is shared by the Installed tab's "Add" dialog and the Browse tab's Install
+    // button. Both sub-tabs live under the same top-level Addons tab, so ShowTabToast's per-tab
+    // (not per-sub-tab) scoping already routes this correctly regardless of which one triggered it -
+    // no separate AddonStatusText/MarketplaceStatusText split needed anymore (issue #13 removes it).
     private async Task AddAddonAsync(string input)
     {
         if (_addonBusy)
@@ -984,17 +1076,17 @@ public partial class MainWindow : Window
         }
 
         _addonBusy = true;
-        AddonStatusText.Text = "Installing…";
+        ShowTabToast("Installing…", ToastSeverity.Info, updateKey: "addon-install");
         try
         {
             InstalledAddon addon = await _addons.AddAsync(input, CurrentWowDir());
             RefreshAddonList();
-            AddonStatusText.Text = $"Installed {WowColorTextParser.StripCodes(addon.Name)}.";
+            ShowTabToast($"Installed {WowColorTextParser.StripCodes(addon.Name)}.", ToastSeverity.Success, updateKey: "addon-install");
         }
         catch (Exception ex)
         {
             _log.Error($"Addon install failed for {input}", ex);
-            AddonStatusText.Text = "Install failed — see the Log tab.";
+            ShowTabToast("Install failed — see the Log tab.", ToastSeverity.Error, updateKey: "addon-install");
         }
         finally
         {
@@ -1008,7 +1100,7 @@ public partial class MainWindow : Window
         {
             _addons.Remove(addon, CurrentWowDir());
             RefreshAddonList();
-            AddonStatusText.Text = $"Removed {WowColorTextParser.StripCodes(addon.Name)}.";
+            ShowTabToast($"Removed {WowColorTextParser.StripCodes(addon.Name)}.", ToastSeverity.Success);
         }
     }
 
@@ -1020,12 +1112,13 @@ public partial class MainWindow : Window
         }
 
         string title = WowColorTextParser.StripCodes(addon.Name);
-        UpdateStatus($"Loading details for '{title}'...");
+        ShowTabToast($"Loading details for '{title}'...", ToastSeverity.Info, updateKey: "addon-details");
         try
         {
             string markdown = await _addons.GetDetailsMarkdownAsync(addon, CurrentWowDir(), CancellationToken.None);
-            string? repoUrl = addon.SourceKind == AddonSourceKind.GitHub ? addon.SourceRef : null;
-            var dialog = new AddonDetailsDialog(title, markdown, addon.IgnoreUpdates, repoUrl);
+            string? repoUrl = addon.SourceKind is AddonSourceKind.GitHub or AddonSourceKind.GitLab ? addon.SourceRef : null;
+            string repoLinkLabel = addon.SourceKind == AddonSourceKind.GitLab ? "View on GitLab" : "View on GitHub";
+            var dialog = new AddonDetailsDialog(title, markdown, addon.IgnoreUpdates, repoUrl, repoLinkLabel: repoLinkLabel);
             ShowModal(dialog);
 
             if (dialog.IgnoreUpdates != addon.IgnoreUpdates)
@@ -1036,11 +1129,9 @@ public partial class MainWindow : Window
                     addon.HasUpdateAvailable = false;
                 }
 
-                _addons.Save();
+                _addons.Save(CurrentWowDir());
                 RefreshAddonList();
             }
-
-            UpdateStatus("Ready.");
         }
         catch (Exception ex)
         {
@@ -1048,7 +1139,7 @@ public partial class MainWindow : Window
             // errors, but this is an async void handler — anything that slips through uncaught here
             // would crash the whole app, not just fail this one dialog.
             _log.Error($"Could not load details for '{title}'.", ex);
-            UpdateStatus("Could not load addon details — see the Log tab.");
+            ShowTabToast("Could not load addon details — see the Log tab.", ToastSeverity.Error);
         }
     }
 
@@ -1070,7 +1161,7 @@ public partial class MainWindow : Window
 
         if (updatable.Count == 0)
         {
-            AddonStatusText.Text = "No addon updates available.";
+            ShowTabToast("No addon updates available.", ToastSeverity.Info);
             return;
         }
 
@@ -1079,7 +1170,7 @@ public partial class MainWindow : Window
             await AddAddonAsync(addon.SourceRef!);
         }
 
-        AddonStatusText.Text = $"Updated {updatable.Count} addon(s).";
+        ShowTabToast($"Updated {updatable.Count} addon(s).", ToastSeverity.Success);
     }
 
     // The Addons tab's visible scrollbar is a standalone ScrollBar (see MainWindow.xaml) rather than
@@ -1130,7 +1221,7 @@ public partial class MainWindow : Window
         {
             string wowDir = CurrentWowDir();
 
-            _addons.Load();
+            _addons.Load(wowDir);
             _addons.RefreshMetadataFromDisk(wowDir);
 
             AddonLibrary.LocalAddonSyncResult sync = _addons.SyncLocalAddons(wowDir);
@@ -1141,18 +1232,29 @@ public partial class MainWindow : Window
                 {
                     foreach (LocalAddonCandidate candidate in dialog.Selected)
                     {
-                        _addons.Adopt(candidate);
+                        _addons.Adopt(candidate, wowDir);
                     }
                 }
             }
 
-            AddonStatusText.Text = "Checking for addon updates…";
-            await _addons.CheckForUpdatesAsync();
+            ShowTabToast("Checking for addon updates…", ToastSeverity.Info, updateKey: "addon-refresh");
+            await _addons.CheckForUpdatesAsync(wowDir);
 
             RefreshAddonList();
-            AddonStatusText.Text = sync.AutoAdopted > 0
-                ? $"Refreshed. {sync.AutoAdopted} local addon(s) added automatically."
-                : "Refreshed.";
+            ShowTabToast(
+                sync.AutoAdopted > 0
+                    ? $"Refreshed. {sync.AutoAdopted} local addon(s) added automatically."
+                    : "Refreshed.",
+                ToastSeverity.Success,
+                updateKey: "addon-refresh");
+        }
+        catch (Exception ex)
+        {
+            // This also runs automatically on startup (see the constructor) - an uncaught exception
+            // here would propagate out of an async void handler and crash the whole app, not just
+            // fail this one refresh.
+            _log.Error("Addon refresh failed.", ex);
+            ShowTabToast("Addon refresh failed — see the Log tab.", ToastSeverity.Error, updateKey: "addon-refresh");
         }
         finally
         {
@@ -1160,26 +1262,593 @@ public partial class MainWindow : Window
         }
     }
 
+    // ---------------- Addons tab: Browse marketplace (issue #8) ----------------
+
+    private readonly ObservableCollection<MarketplaceRowViewModel> _marketplaceRows = new();
+    private readonly Dictionary<string, MarketplaceRowViewModel> _marketplaceRowCache = new(StringComparer.OrdinalIgnoreCase);
+    private List<MarketplaceAddonEntry> _marketplaceEntries = new();
+    private bool _marketplaceInitialized;
+    private bool _marketplaceBusy;
+    private string _warperiaSort = "popularity";
+
+    /// <summary>Backing object for one Browse result row — mirrors Teron_Addon_Manager's MarketplaceRow (logic only, not its UI): flips its own Install/Uninstall glyph live via INotifyPropertyChanged instead of requiring a full list rebuild.</summary>
+    private sealed class MarketplaceRowViewModel : INotifyPropertyChanged
+    {
+        public required MarketplaceAddonEntry Entry { get; init; }
+        public string AuthorDisplay => Entry.Author is { Length: > 0 } a ? $"by {a}" : string.Empty;
+        public bool HasDescription => !string.IsNullOrWhiteSpace(Entry.Description);
+
+        // Guards against re-fetching every time a virtualized container recycles this row back into
+        // view (Loaded fires again on each realize) - only the first realize should ever kick off
+        // the actual download.
+        public bool ThumbnailLoadStarted { get; set; }
+
+        private ImageSource? _thumbnailImage;
+        public ImageSource? ThumbnailImage
+        {
+            get => _thumbnailImage;
+            set { _thumbnailImage = value; OnPropertyChanged(nameof(ThumbnailImage)); }
+        }
+
+        private bool _isInstalled;
+        public bool IsInstalled
+        {
+            get => _isInstalled;
+            set
+            {
+                if (_isInstalled == value) return;
+                _isInstalled = value;
+                OnPropertyChanged(nameof(IsInstalled));
+                OnPropertyChanged(nameof(InstallGlyph));
+                OnPropertyChanged(nameof(InstallToolTip));
+                OnPropertyChanged(nameof(InstallBackground));
+            }
+        }
+
+        // Reuses the same glyphs as the Installed list's own Update ("download") and Remove (trash)
+        // buttons - Install and Uninstall are the same action classes, just for a not-yet-tracked addon.
+        public string InstallGlyph => IsInstalled ? "" : "";
+        public string InstallToolTip => IsInstalled ? "Remove this addon" : "Install this addon";
+        // Colors come from App.xaml's shared action-color brushes (issue #14) rather than a locally
+        // hardcoded hex value, so this can't drift out of sync with every other Install/Remove button.
+        public Brush InstallBackground => (Brush)Application.Current.Resources[IsInstalled ? "RemoveActionBrush" : "InstallActionBrush"];
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+        private void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
+
+    private void OnAddonsSubTabChanged(object sender, RoutedEventArgs e)
+    {
+        // AddonsInstalledToggle's XAML-declared IsChecked="True" fires this Checked handler during
+        // InitializeComponent() itself, before AddonsBrowseToggle (declared right after it) has been
+        // assigned to its field yet - guard against that premature, still-parsing-time call.
+        if (AddonsBrowseToggle is null || AddonsBrowseToggle.IsChecked != true || _marketplaceInitialized)
+        {
+            return;
+        }
+
+        _marketplaceInitialized = true;
+        MarketplaceList.ItemsSource = _marketplaceRows;
+
+        MarketplaceProviderCombo.Items.Add("Legacy-WoW");
+        MarketplaceProviderCombo.Items.Add("Warperia");
+        MarketplaceProviderCombo.SelectedIndex = 0; // triggers OnMarketplaceProviderChanged, which does the first load
+
+        UpdateMarketplaceSearchPlaceholder();
+    }
+
+    private void OnMarketplaceProviderChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_marketplaceInitialized)
+        {
+            return;
+        }
+
+        bool isLegacyWow = MarketplaceProviderCombo.SelectedIndex == 0;
+
+        MarketplaceCategoryCombo.Items.Clear();
+        if (isLegacyWow)
+        {
+            foreach (LegacyWowCategory cat in MarketplaceService.LegacyWowCategories)
+            {
+                MarketplaceCategoryCombo.Items.Add(new ComboBoxItem { Content = cat.Name, Tag = cat.Id });
+            }
+            MarketplaceCategoryCombo.IsEnabled = true;
+        }
+        else
+        {
+            // Warperia does have its own category system (checkbox-based, e.g. data-category="class"),
+            // but its actual filtering mechanism isn't confirmed working — no per-entry category data
+            // on the result cards, and the filter looked AJAX-driven rather than a simple URL param.
+            // Left unimplemented rather than guessed at; search still works for narrowing results.
+            MarketplaceCategoryCombo.Items.Add(new ComboBoxItem { Content = "All (not supported yet)", Tag = null });
+            MarketplaceCategoryCombo.IsEnabled = false;
+        }
+        MarketplaceCategoryCombo.SelectedIndex = 0;
+
+        MarketplaceSortCombo.Items.Clear();
+        MarketplaceSortCombo.Items.Add(new ComboBoxItem { Content = "Name (A-Z)", Tag = "name_asc" });
+        MarketplaceSortCombo.Items.Add(new ComboBoxItem { Content = "Name (Z-A)", Tag = "name_desc" });
+        if (isLegacyWow)
+        {
+            MarketplaceSortCombo.Items.Add(new ComboBoxItem { Content = "Most Popular", Tag = "downloads_client" });
+        }
+        else
+        {
+            foreach ((string value, string label) in MarketplaceService.WarperiaSortOptions)
+            {
+                MarketplaceSortCombo.Items.Add(new ComboBoxItem { Content = label, Tag = $"server:{value}" });
+            }
+        }
+        MarketplaceSortCombo.SelectedIndex = 0;
+
+        _ = LoadMarketplaceCatalogAsync(forceRefresh: false);
+    }
+
+    private void OnMarketplaceCategoryChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_marketplaceInitialized || MarketplaceProviderCombo.SelectedIndex != 0)
+        {
+            return; // category re-fetch only applies to Legacy-WoW for now
+        }
+
+        _ = LoadMarketplaceCatalogAsync(forceRefresh: false);
+    }
+
+    private void OnMarketplaceRefreshClick(object sender, RoutedEventArgs e)
+    {
+        _ = LoadMarketplaceCatalogAsync(forceRefresh: true);
+    }
+
+    // Lets the wheel scroll MarketplaceList from anywhere over the Browse tab's body - including the
+    // empty background below a short/loading list - not just while hovering the ListBox itself,
+    // matching AddonScrollViewer's coverage on the Installed sub-tab. The wrapping Grid this is
+    // attached to Stretches to fill the whole Row1/Column0 cell (see MainWindow.xaml), so it receives
+    // wheel input over that entire area; this reaches into MarketplaceList's own internal
+    // ScrollViewer (rather than an outer wrapper one, since that inner ScrollViewer is what's
+    // actually doing the real virtualized scrolling here) the same way OnAddonListPreviewMouseWheel
+    // reaches AddonScrollViewer.
+    private void OnMarketplacePreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (FindVisualChild<ScrollViewer>(MarketplaceList) is { } scrollViewer)
+        {
+            scrollViewer.ScrollToVerticalOffset(scrollViewer.VerticalOffset - e.Delta);
+            e.Handled = true;
+        }
+    }
+
+    // MarketplaceList keeps its own internal ScrollViewer (needed for VirtualizingStackPanel to
+    // actually virtualize the ~700-entry Legacy-WoW catalog) but hides that ScrollViewer's own
+    // scrollbar chrome (see MainWindow.xaml) since it visually broke PageCardBottomStyle's rounded
+    // corner. MarketplaceScrollBar is a separate, properly-aligned standalone bar in its own Grid
+    // column; this event (raised by the ListBox's internal ScrollViewer, which ScrollChanged bubbles
+    // up from) is what keeps that standalone bar's Value/Maximum/ViewportSize in sync with it.
+    private void OnMarketplaceListScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        MarketplaceScrollBar.Maximum = e.ExtentHeight - e.ViewportHeight;
+        MarketplaceScrollBar.ViewportSize = e.ViewportHeight;
+        MarketplaceScrollBar.LargeChange = e.ViewportHeight;
+        MarketplaceScrollBar.Value = e.VerticalOffset;
+    }
+
+    // The reverse direction of the above: dragging/clicking MarketplaceScrollBar only moves its own
+    // Value, so this reaches into MarketplaceList's internal ScrollViewer (via VisualTreeHelper -
+    // that inner ScrollViewer isn't a named, directly bindable element the way AddonScrollViewer is,
+    // since it lives inside ListBox's own default template) and applies the new offset there.
+    private void OnMarketplaceScrollBarScroll(object sender, ScrollEventArgs e)
+    {
+        if (FindVisualChild<ScrollViewer>(MarketplaceList) is { } scrollViewer)
+        {
+            scrollViewer.ScrollToVerticalOffset(e.NewValue);
+        }
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        int count = VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            if (FindVisualChild<T>(child) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    // Warperia's own pagination doesn't expose a reliable "last page" number up front (its
+    // page-numbers control only ever renders a handful of nearby pages), so rather than guess a
+    // total, this just keeps requesting the next page until one comes back with fewer than a full
+    // page's worth of entries (~28 normally, verified against real fetched pages - 20 leaves margin
+    // below that without risking mistaking a real full page for the last one). MaxPages is a pure
+    // safety net against an unexpected server response looping forever, not an expected ceiling -
+    // ~40 pages is already far more than Warperia's real catalog needs.
+    private const int WarperiaFullPageThreshold = 20;
+    private const int WarperiaMaxPages = 40;
+
+    private async Task LoadMarketplaceCatalogAsync(bool forceRefresh)
+    {
+        if (_marketplaceBusy)
+        {
+            return;
+        }
+
+        _marketplaceBusy = true;
+        ShowTabToast("Loading catalog…", ToastSeverity.Info, updateKey: "marketplace-load");
+        try
+        {
+            bool isLegacyWow = MarketplaceProviderCombo.SelectedIndex == 0;
+            List<MarketplaceAddonEntry> fetched;
+            if (isLegacyWow)
+            {
+                int categoryId = MarketplaceCategoryCombo.SelectedItem is ComboBoxItem { Tag: int id } ? id : 137;
+                fetched = (await _marketplace.FetchLegacyWowCatalogAsync(categoryId, CancellationToken.None, forceRefresh)).ToList();
+            }
+            else
+            {
+                fetched = new List<MarketplaceAddonEntry>();
+                for (int page = 1; page <= WarperiaMaxPages; page++)
+                {
+                    IReadOnlyList<MarketplaceAddonEntry> pageEntries =
+                        await _marketplace.FetchWarperiaPageAsync(page, _warperiaSort, CancellationToken.None, forceRefresh);
+                    fetched.AddRange(pageEntries);
+                    ShowTabToast($"Loading catalog… ({fetched.Count} so far)", ToastSeverity.Info, updateKey: "marketplace-load");
+                    if (pageEntries.Count < WarperiaFullPageThreshold)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            _marketplaceEntries = fetched;
+            _marketplaceRowCache.Clear();
+
+            ApplyMarketplaceFilters();
+            ShowTabToast($"Showing {_marketplaceRows.Count} of {_marketplaceEntries.Count} addons.", ToastSeverity.Success, updateKey: "marketplace-load");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Marketplace catalog fetch failed", ex);
+            ShowTabToast("Could not load the catalog — see the Log tab.", ToastSeverity.Error, updateKey: "marketplace-load");
+        }
+        finally
+        {
+            _marketplaceBusy = false;
+        }
+    }
+
+    private void OnMarketplaceFilterChanged(object sender, RoutedEventArgs e)
+    {
+        UpdateMarketplaceSearchPlaceholder();
+        ApplyMarketplaceFilters();
+    }
+
+    private void OnMarketplaceSortChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_marketplaceInitialized)
+        {
+            return;
+        }
+
+        if (MarketplaceSortCombo.SelectedItem is ComboBoxItem { Tag: string tag } && tag.StartsWith("server:", StringComparison.Ordinal))
+        {
+            _warperiaSort = tag["server:".Length..];
+            _ = LoadMarketplaceCatalogAsync(forceRefresh: false);
+            return;
+        }
+
+        ApplyMarketplaceFilters();
+    }
+
+    private void ApplyMarketplaceFilters()
+    {
+        IEnumerable<MarketplaceAddonEntry> query = _marketplaceEntries;
+
+        string search = MarketplaceSearchBox.Text.Trim();
+        if (search.Length > 0)
+        {
+            query = query.Where(entry =>
+                entry.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                (entry.Description?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (entry.Author?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+
+        string sortTag = MarketplaceSortCombo.SelectedItem is ComboBoxItem { Tag: string t } ? t : "name_asc";
+        query = sortTag switch
+        {
+            "name_desc" => query.OrderByDescending(en => en.Name, StringComparer.OrdinalIgnoreCase),
+            "downloads_client" => query.OrderByDescending(en => en.Downloads ?? 0),
+            _ => query.OrderBy(en => en.Name, StringComparer.OrdinalIgnoreCase),
+        };
+
+        _marketplaceRows.Clear();
+        foreach (MarketplaceAddonEntry entry in query)
+        {
+            if (!_marketplaceRowCache.TryGetValue(entry.DetailUrl, out MarketplaceRowViewModel? row))
+            {
+                row = new MarketplaceRowViewModel { Entry = entry };
+                row.IsInstalled = _addons.Addons.Any(a => string.Equals(a.SourceRef, entry.DetailUrl, StringComparison.OrdinalIgnoreCase));
+                _marketplaceRowCache[entry.DetailUrl] = row;
+                // Thumbnail loading is deferred to OnMarketplaceRowLoaded (fired when the row's
+                // container is actually realized by the virtualizing panel) rather than started
+                // here for every filtered entry - with ~700 Legacy-WoW entries (or Warperia's now
+                // fully-paged-in catalog), firing a thumbnail fetch for all of them the instant the
+                // catalog loads meant hundreds of concurrent requests and UI-thread image-decode
+                // callbacks arriving in a burst, which is exactly what caused the reported stutter.
+            }
+
+            _marketplaceRows.Add(row);
+        }
+
+        // Rebuilding the row collection doesn't reset MarketplaceList's own scroll position - its
+        // internal ScrollViewer just clamps whatever offset it already had to the new, possibly
+        // much shorter extent. Without this, switching from a long catalog (Legacy-WoW, ~700
+        // entries) to a shorter one (Warperia) while scrolled down would land partway through - or
+        // at the very bottom of - the new list instead of at its top.
+        if (FindVisualChild<ScrollViewer>(MarketplaceList) is { } scrollViewer)
+        {
+            scrollViewer.ScrollToHome();
+        }
+    }
+
+    private void OnMarketplaceRowLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: MarketplaceRowViewModel row } || row.ThumbnailLoadStarted)
+        {
+            return;
+        }
+
+        row.ThumbnailLoadStarted = true;
+        _ = LoadMarketplaceThumbnailAsync(row);
+    }
+
+    private async Task LoadMarketplaceThumbnailAsync(MarketplaceRowViewModel row)
+    {
+        string? url = row.Entry.ThumbnailUrl;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return;
+        }
+
+        try
+        {
+            if (string.Equals(row.Entry.Source, "Warperia", StringComparison.OrdinalIgnoreCase))
+            {
+                // Token-gated - has to go through the same cookie-carrying HttpClient that fetched
+                // the listing page, so it can't just be a plain BitmapImage.UriSource load.
+                byte[]? bytes = await _marketplace.FetchThumbnailBytesAsync(url, CancellationToken.None);
+                if (bytes is null)
+                {
+                    return;
+                }
+
+                var bitmap = new BitmapImage();
+                using (var stream = new MemoryStream(bytes))
+                {
+                    bitmap.BeginInit();
+                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                    bitmap.StreamSource = stream;
+                    bitmap.EndInit();
+                }
+                bitmap.Freeze();
+                row.ThumbnailImage = bitmap;
+            }
+            else
+            {
+                // Legacy-WoW thumbnails are plain, unauthenticated URLs - WPF's own imaging pipeline
+                // does the async fetch itself, no custom fetch code needed. Deliberately NOT frozen:
+                // with CacheOption.OnLoad the download itself still happens asynchronously in the
+                // background even after EndInit() returns, and Freeze() throws ("This Freezable
+                // cannot be frozen") if called before that download actually finishes. Skipping
+                // Freeze() entirely is fine here - it only matters for cross-thread sharing/perf,
+                // and this ImageSource is only ever touched from the UI thread.
+                var bitmap = new BitmapImage();
+                bitmap.BeginInit();
+                bitmap.UriSource = new Uri(url, UriKind.Absolute);
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.EndInit();
+                row.ThumbnailImage = bitmap;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Debug($"Marketplace thumbnail failed for {row.Entry.Name}: {ex.Message}");
+        }
+    }
+
+    private async void OnMarketplaceInstallClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: MarketplaceRowViewModel row })
+        {
+            return;
+        }
+
+        if (row.IsInstalled)
+        {
+            InstalledAddon? installed = _addons.Addons.FirstOrDefault(
+                a => string.Equals(a.SourceRef, row.Entry.DetailUrl, StringComparison.OrdinalIgnoreCase));
+            if (installed is null)
+            {
+                return;
+            }
+
+            _addons.Remove(installed, CurrentWowDir());
+            RefreshAddonList();
+            row.IsInstalled = false;
+            ShowTabToast($"Removed {WowColorTextParser.StripCodes(installed.Name)}.", ToastSeverity.Success);
+            return;
+        }
+
+        await AddAddonAsync(row.Entry.DetailUrl);
+        row.IsInstalled = _addons.Addons.Any(a => string.Equals(a.SourceRef, row.Entry.DetailUrl, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async void OnMarketplaceDetailsClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: MarketplaceRowViewModel row })
+        {
+            return;
+        }
+
+        ShowTabToast($"Loading details for '{row.Entry.Name}'...", ToastSeverity.Info, updateKey: "marketplace-details");
+        try
+        {
+            string markdown = await _marketplace.FetchAddonDetailsMarkdownAsync(row.Entry, CancellationToken.None);
+            var dialog = new AddonDetailsDialog(row.Entry.Name, markdown, ignoreUpdates: false, showIgnoreUpdates: false);
+            ShowModal(dialog);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Could not load marketplace details for '{row.Entry.Name}'.", ex);
+            ShowTabToast("Could not load addon details — see the Log tab.", ToastSeverity.Error, updateKey: "marketplace-details");
+        }
+    }
+
+    private void OnMarketplaceSearchKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            Keyboard.ClearFocus();
+            FocusManager.SetFocusedElement(FocusManager.GetFocusScope(MarketplaceSearchBox), null);
+            UpdateMarketplaceSearchPlaceholder();
+            e.Handled = true;
+        }
+    }
+
+    private void OnMarketplaceSearchFocusChanged(object sender, RoutedEventArgs e) => UpdateMarketplaceSearchPlaceholder();
+
+    private void UpdateMarketplaceSearchPlaceholder()
+        => MarketplaceSearchPlaceholder.Visibility = MarketplaceSearchBox.Text.Length == 0 && !MarketplaceSearchBox.IsFocused
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    private void OnClearMarketplaceSearch(object sender, RoutedEventArgs e)
+    {
+        MarketplaceSearchBox.Text = string.Empty;
+        MarketplaceSearchBox.Focus();
+    }
+
     // ---------------- Home tab (Login & Game) ----------------
 
+    /// <summary>Loads both the global and directory-scoped halves — used at startup. A directory
+    /// switch later on only needs <see cref="LoadDirectorySettingsIntoUi"/>, not this.</summary>
     private void LoadSettingsIntoUi()
+    {
+        LoadGlobalSettingsIntoUi();
+        LoadDirectorySettingsIntoUi();
+    }
+
+    private void LoadGlobalSettingsIntoUi()
     {
         LauncherSettings s = _settings.Current;
         GameFolderBox.Text = s.WowDirectory ?? string.Empty;
-        AutoLoginCheck.IsChecked = s.AutoLoginEnabled;
-        AccountBox.Text = s.Account;
-        SavePasswordCheck.IsChecked = s.SavePassword;
-        PasswordBoxInput.Password = s.SavePassword ? _settings.GetPassword() : string.Empty;
-        DelayBox.Text = s.LoginDelayMs.ToString(CultureInfo.InvariantCulture);
-        CleanWdbCheck.IsChecked = s.CleanWdbBeforeLaunch;
         MinimizeOnLaunchCheck.IsChecked = s.MinimizeOnLaunch;
-        RealmlistBox.Text = s.Realmlist;
         RefreshRealmlistHistoryItems();
+        RefreshManagedDirectoryItems();
         ClientUrlBox.Text = string.IsNullOrWhiteSpace(s.ClientDownloadUrl)
             ? GameInstallService.DefaultClientUrl
             : s.ClientDownloadUrl;
 
         UpdateGameFolderHint();
+    }
+
+    /// <summary>
+    /// The most-recently-used OTHER managed directory that still exists on disk, or null if the
+    /// configured directory is unset/still there/has no surviving alternative - called once at
+    /// startup, before ManagedDirectories has had a chance to be pruned by RefreshManagedDirectoryItems,
+    /// so it re-checks Directory.Exists itself rather than assuming the list is already clean.
+    /// </summary>
+    private string? TryResolveFallbackDirectory()
+    {
+        string? configured = _settings.Current.WowDirectory;
+        if (string.IsNullOrWhiteSpace(configured) || Directory.Exists(configured))
+        {
+            return null;
+        }
+
+        return _settings.Current.ManagedDirectories.FirstOrDefault(
+            d => !string.Equals(d, configured, StringComparison.OrdinalIgnoreCase) && Directory.Exists(d));
+    }
+
+    /// <summary>
+    /// Adds (or moves to the front of) the managed-directory quick-switch list — called whenever the
+    /// launcher confirms a real directory is in use (startup, a successful install/adopt, or the user
+    /// browsing/typing a different existing folder), so the dropdown builds itself up without needing
+    /// its own separate "add to list" step anywhere.
+    /// </summary>
+    private void RecordManagedDirectory(string dir)
+    {
+        if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir))
+        {
+            return;
+        }
+
+        List<string> dirs = _settings.Current.ManagedDirectories;
+        dirs.RemoveAll(d => string.Equals(d, dir, StringComparison.OrdinalIgnoreCase));
+        dirs.Insert(0, dir);
+        _settings.Save();
+        RefreshManagedDirectoryItems();
+    }
+
+    /// <summary>Prunes any managed directory that no longer exists on disk (moved/deleted folder),
+    /// then repopulates the dropdown and highlights whichever entry matches the directory currently
+    /// in use, if any.</summary>
+    private void RefreshManagedDirectoryItems()
+    {
+        List<string> dirs = _settings.Current.ManagedDirectories;
+        int removed = dirs.RemoveAll(d => !Directory.Exists(d));
+        if (removed > 0)
+        {
+            _settings.Save();
+        }
+
+        _managedDirectoryItems.Clear();
+        foreach (string d in dirs)
+        {
+            _managedDirectoryItems.Add(d);
+        }
+
+        string current = CurrentWowDir();
+        DirectorySwitchBox.SelectedItem = _managedDirectoryItems.FirstOrDefault(
+            d => string.Equals(d, current, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void OnManagedDirectorySelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (DirectorySwitchBox.SelectedItem is string selected && !_loading &&
+            !string.Equals(selected, GameFolderBox.Text.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            // Setting .Text fires TextChanged, which schedules the same auto-save/refresh pipeline
+            // (ForceStopClientDownloadForDirectoryChange, directory-settings reload, tab rescans) any
+            // other way of switching directories already goes through.
+            GameFolderBox.Text = selected;
+        }
+    }
+
+    /// <summary>Populates every UI field scoped to the currently-selected WoW directory (account,
+    /// password, realmlist, tweak checkboxes/sliders) from <see cref="_dirSettings"/>.Current — called
+    /// at startup and again whenever the selected directory changes, so switching directories actually
+    /// repopulates these instead of leaving the previous directory's values showing.</summary>
+    private void LoadDirectorySettingsIntoUi()
+    {
+        DirectorySettings s = _dirSettings.Current;
+        AutoLoginCheck.IsChecked = s.AutoLoginEnabled;
+        AccountBox.Text = s.Account;
+        SavePasswordCheck.IsChecked = s.SavePassword;
+        PasswordBoxInput.Password = s.SavePassword ? _dirSettings.GetPassword() : string.Empty;
+        DelayBox.Text = s.LoginDelayMs.ToString(CultureInfo.InvariantCulture);
+        CleanWdbCheck.IsChecked = s.CleanWdbBeforeLaunch;
+        RealmlistBox.Text = s.Realmlist;
+
+        BuildPatchList();
+
         UpdateRealmlistLabel();
     }
 
@@ -1187,15 +1856,7 @@ public partial class MainWindow : Window
     {
         LauncherSettings s = _settings.Current;
         s.WowDirectory = string.IsNullOrWhiteSpace(GameFolderBox.Text) ? null : GameFolderBox.Text.Trim();
-        s.AutoLoginEnabled = AutoLoginCheck.IsChecked == true;
-        s.Account = AccountBox.Text.Trim();
-        s.SavePassword = SavePasswordCheck.IsChecked == true;
-        s.LoginDelayMs = int.TryParse(DelayBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int d)
-            ? Math.Max(0, d)
-            : s.LoginDelayMs;
-        s.CleanWdbBeforeLaunch = CleanWdbCheck.IsChecked == true;
         s.MinimizeOnLaunch = MinimizeOnLaunchCheck.IsChecked == true;
-        s.Realmlist = RealmlistBox.Text.Trim();
 
         // Only accept a well-formed absolute http(s) URL; otherwise keep whatever was last valid
         // (a URL drives an actual HTTP request, so a malformed one must never silently take effect).
@@ -1210,19 +1871,29 @@ public partial class MainWindow : Window
             s.ClientDownloadUrl = url;
         }
 
-        _settings.SetPassword(PasswordBoxInput.Password);
+        DirectorySettings ds = _dirSettings.Current;
+        ds.AutoLoginEnabled = AutoLoginCheck.IsChecked == true;
+        ds.Account = AccountBox.Text.Trim();
+        ds.SavePassword = SavePasswordCheck.IsChecked == true;
+        ds.LoginDelayMs = int.TryParse(DelayBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int d)
+            ? Math.Max(0, d)
+            : ds.LoginDelayMs;
+        ds.CleanWdbBeforeLaunch = CleanWdbCheck.IsChecked == true;
+        ds.Realmlist = RealmlistBox.Text.Trim();
 
-        s.EnabledPatchIds = new List<string>();
+        _dirSettings.SetPassword(PasswordBoxInput.Password);
+
+        ds.EnabledPatchIds = new List<string>();
         foreach (PatchControl pc in _patchControls)
         {
             if (pc.Box.IsChecked == true)
             {
-                s.EnabledPatchIds.Add(pc.Def.Id);
+                ds.EnabledPatchIds.Add(pc.Def.Id);
             }
 
             if (pc.Slider is not null && pc.Def.Parameter is PatchParameter p)
             {
-                s.PatchParameters[pc.Def.Id] = p.IsInteger ? Math.Round(pc.Slider.Value) : pc.Slider.Value;
+                ds.PatchParameters[pc.Def.Id] = p.IsInteger ? Math.Round(pc.Slider.Value) : pc.Slider.Value;
             }
         }
     }
@@ -1269,39 +1940,64 @@ public partial class MainWindow : Window
         _settings.Save();
 
         string wowDir = CurrentWowDir();
-        string realmlist = _settings.Current.Realmlist;
         string clientUrl = CurrentClientUrl();
 
         bool wowDirChanged = !string.Equals(wowDir, _lastAppliedWowDir, StringComparison.OrdinalIgnoreCase);
-        bool realmlistChanged = !string.Equals(realmlist, _lastAppliedRealmlist, StringComparison.Ordinal);
         bool clientUrlChanged = !string.Equals(clientUrl, _lastAppliedClientUrl, StringComparison.OrdinalIgnoreCase);
 
-        if (realmlistChanged && !string.IsNullOrWhiteSpace(realmlist) && Directory.Exists(wowDir))
+        // A queued/in-flight client download is tied to whichever directory it was started against -
+        // letting it keep running after the user points the UI at a different directory silently
+        // continued downloading into a folder that's no longer even selected.
+        if (wowDirChanged)
         {
-            try
+            ForceStopClientDownloadForDirectoryChange();
+        }
+
+        if (wowDirChanged)
+        {
+            // The directory-scoped fields just collected above (account/password/realmlist/tweaks)
+            // still belong to whichever directory was selected before this tick - the UI hasn't been
+            // reloaded for the new one yet, so there's nothing real to persist or apply against the
+            // new directory from this collection pass. Reload everything scoped to it fresh instead
+            // (this is also what actually fixes switching directories showing stale settings).
+            _dirSettings.Load(wowDir);
+            LoadDirectorySettingsIntoUi();
+            RecordManagedDirectory(wowDir);
+
+            RefreshDllList();
+            RefreshDetectedDlls();
+            RefreshIgnoredDllList();
+            RefreshMpqList();
+            // Addon tracking (.teronwow-addons.json) lives inside each WoW directory - Load(wowDir)
+            // has to run before RefreshAddonList can show anything real for the newly-selected one.
+            _addons.Load(wowDir);
+            RefreshAddonList();
+        }
+        else
+        {
+            _dirSettings.Save(wowDir);
+
+            string realmlist = _dirSettings.Current.Realmlist;
+            bool realmlistChanged = !string.Equals(realmlist, _lastAppliedRealmlist, StringComparison.Ordinal);
+            if (realmlistChanged && !string.IsNullOrWhiteSpace(realmlist) && Directory.Exists(wowDir))
             {
-                if (!_realmlist.Write(wowDir, realmlist))
+                try
                 {
-                    UpdateStatus("Warning: realmlist.wtf may not have saved correctly — see the Log tab.");
+                    if (!_realmlist.Write(wowDir, realmlist))
+                    {
+                        ShowGlobalToast("Warning: realmlist.wtf may not have saved correctly — see the Log tab.", ToastSeverity.Warning);
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                _log.Error("Failed to write realmlist.wtf.", ex);
-                UpdateStatus("Failed to write realmlist.wtf — see the Log tab.");
+                catch (Exception ex)
+                {
+                    _log.Error("Failed to write realmlist.wtf.", ex);
+                    ShowGlobalToast("Failed to write realmlist.wtf — see the Log tab.", ToastSeverity.Error);
+                }
             }
         }
 
         UpdateGameFolderHint();
         UpdateRealmlistLabel();
-
-        if (wowDirChanged)
-        {
-            RefreshDllList();
-            RefreshDetectedDlls();
-            RefreshMpqList();
-            RefreshAddonList();
-        }
 
         if (wowDirChanged || clientUrlChanged)
         {
@@ -1309,10 +2005,10 @@ public partial class MainWindow : Window
         }
 
         _lastAppliedWowDir = wowDir;
-        _lastAppliedRealmlist = realmlist;
+        _lastAppliedRealmlist = _dirSettings.Current.Realmlist;
         _lastAppliedClientUrl = clientUrl;
 
-        UpdateStatus("Settings saved.");
+        ShowGlobalToast("Settings saved.", ToastSeverity.Success);
     }
 
     private string CurrentWowDir()
@@ -1329,7 +2025,9 @@ public partial class MainWindow : Window
     private void UpdateRealmlistLabel()
     {
         string realm = RealmlistBox.Text?.Trim() ?? string.Empty;
-        RealmlistLabel.Text = $"Realmlist: {(string.IsNullOrEmpty(realm) ? "(not set)" : realm)}";
+        // No "Realmlist:" prefix here - the "Realm" header above this row already provides that
+        // context, so the label itself only needs the value (or a placeholder for none set).
+        RealmlistLabel.Text = string.IsNullOrEmpty(realm) ? "(not set)" : realm;
         _ = RefreshRealmStatusAsync();
     }
 
@@ -1488,7 +2186,14 @@ public partial class MainWindow : Window
     {
         string dir = CurrentWowDir();
         string exe = Path.Combine(dir, "WoW.exe");
-        GameFolderHint.Text = File.Exists(exe) ? $"✓ WoW.exe found in {dir}" : $"⚠ WoW.exe not found in {dir}";
+        bool installed = File.Exists(exe);
+        GameFolderHint.Text = installed ? $"✓ WoW.exe found in {dir}" : $"⚠ WoW.exe not found in {dir}";
+
+        // Repair/Delete both only make sense once there's an actual client to act on - previously
+        // always enabled, so clicking either with nothing installed just produced a toast saying so
+        // instead of the buttons themselves reflecting that up front.
+        RepairGameFilesButton.IsEnabled = installed;
+        DeleteGameFilesButton.IsEnabled = installed;
     }
 
     private async void OnRepairGameFiles(object sender, RoutedEventArgs e)
@@ -1496,7 +2201,7 @@ public partial class MainWindow : Window
         string wowDir = CurrentWowDir();
         if (!_install.IsInstalled(wowDir))
         {
-            UpdateStatus("Nothing installed to repair yet.");
+            ShowGlobalToast("Nothing installed to repair yet.", ToastSeverity.Info);
             return;
         }
 
@@ -1512,7 +2217,72 @@ public partial class MainWindow : Window
             return;
         }
 
-        await RunClientDownloadAsync(wowDir, "Game files repaired.", "Repair failed");
+        await RunClientDownloadAsync(wowDir, "Game files repaired.", "Repair failed", InstallColor);
+    }
+
+    /// <summary>
+    /// Removes exactly what the last install/repair's client archive provided (see
+    /// GameInstallService.DeleteInstalledClientFiles) - addons, WTF settings, logs, and realmlist.wtf
+    /// are untouched, since none of those come from the client archive itself.
+    /// </summary>
+    private async void OnDeleteGameFiles(object sender, RoutedEventArgs e)
+    {
+        string wowDir = CurrentWowDir();
+        if (!_install.IsInstalled(wowDir))
+        {
+            ShowGlobalToast("Nothing installed to delete.", ToastSeverity.Info);
+            return;
+        }
+
+        if (!_install.HasInstallManifest(wowDir))
+        {
+            var noManifest = new ConfirmDialog(
+                "Can't Delete Safely Yet",
+                "No install record exists for this folder yet (it may have been installed by an older " +
+                "launcher version, or copied in manually), so there's no way to know exactly which files " +
+                "came from the client archive versus anything else in this folder. Run Repair now? It's " +
+                "safe, and records what it writes so Delete can target exactly that afterward.",
+                confirmText: "Run Repair",
+                cancelText: "Cancel");
+            if (ShowModal(noManifest) == true)
+            {
+                await RunClientDownloadAsync(wowDir, "Game files repaired.", "Repair failed", InstallColor);
+            }
+
+            return;
+        }
+
+        var confirm = new ConfirmDialog(
+            "Delete Game Files",
+            "This permanently deletes the client files the last install/repair placed in this folder " +
+            "(Data\\, WoW.exe, Fonts\\, etc.). Your installed addons, WTF settings/saved variables, and " +
+            "logs are not touched. This cannot be undone. Continue?",
+            confirmText: "Delete",
+            cancelText: "Cancel");
+        if (ShowModal(confirm) != true)
+        {
+            return;
+        }
+
+        SetLaunchOperationBusy(true);
+        try
+        {
+            await Task.Run(() => _install.DeleteInstalledClientFiles(wowDir));
+            _dirSettings.Current.InstalledClientSignature = null;
+            _dirSettings.Save(wowDir);
+            ShowGlobalToast("Game files deleted.", ToastSeverity.Success);
+            UpdateGameFolderHint();
+            await RefreshPlayButtonStateAsync();
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Delete game files failed.", ex);
+            ShowGlobalToast("Delete failed — see the Log tab.", ToastSeverity.Error);
+        }
+        finally
+        {
+            SetLaunchOperationBusy(false);
+        }
     }
 
     /// <summary>
@@ -1526,6 +2296,10 @@ public partial class MainWindow : Window
     {
         string wowDir = CurrentWowDir();
         BackupIntegrityStatus status;
+        MainProgressBar.Visibility = Visibility.Visible;
+        MainProgressBar.IsIndeterminate = true;
+        MainProgressBar.Foreground = PlayColor;
+        ProgressStatusText.Text = "Verifying backup integrity...";
         try
         {
             status = await Task.Run(() => _orchestrator.VerifyPristineBackupIntegrity(wowDir));
@@ -1534,6 +2308,12 @@ public partial class MainWindow : Window
         {
             _log.Warn($"Could not verify the pristine backup's integrity: {ex.Message}");
             return;
+        }
+        finally
+        {
+            MainProgressBar.Visibility = Visibility.Collapsed;
+            MainProgressBar.IsIndeterminate = false;
+            ProgressStatusText.Text = string.Empty;
         }
 
         if (status != BackupIntegrityStatus.Mismatch)
@@ -1558,7 +2338,129 @@ public partial class MainWindow : Window
         }
 
         _orchestrator.DiscardCorruptBackup(wowDir);
-        await RunClientDownloadAsync(wowDir, "Game files repaired.", "Repair failed");
+        await RunClientDownloadAsync(wowDir, "Game files repaired.", "Repair failed", InstallColor);
+    }
+
+    // ---------------- Launcher self-update / "what's new" ----------------
+
+    /// <summary>
+    /// Runs the "what's new" check before the update check, sequentially rather than in parallel —
+    /// showing both as separate modal dialogs at once on startup would stack awkwardly. Neither step
+    /// can crash startup: each is wrapped in its own try/catch, matching this app's established
+    /// "degrade to a warning, never throw from a startup-reachable path" convention.
+    /// </summary>
+    private async Task CheckForLauncherUpdateAsync()
+    {
+        await ShowWhatsNewIfNeededAsync();
+
+        try
+        {
+            LauncherUpdateInfo? update = await _launcherUpdate.CheckForUpdateAsync(AppInfo.Version, CancellationToken.None);
+            if (update is null)
+            {
+                return;
+            }
+
+            var confirm = new UpdateConfirmDialog(
+                $"Current version: v{AppInfo.Version}\nLatest version: v{update.Version}",
+                "A newer version of Teron WoW Launcher is available. Do you wish to update?");
+            if (ShowModal(confirm) != true)
+            {
+                return;
+            }
+
+            // Reuses OnInstallProgress as the progress callback (same as the client download flow) -
+            // it never sees Extracting=true here since this flow has no extraction phase, so its
+            // "Extracting..." branch simply never triggers. Gold, since this is an update action on
+            // the launcher itself, not the game client (issue #13). Only CancelDownloadButton is
+            // shown here (_downloadSupportsPauseResume left false, so PauseResumeButton stays
+            // hidden) - this download isn't resumable (a fresh temp folder every attempt, unlike
+            // GameInstallService's fixed-path Range-resume support), and the installer is small
+            // enough that a hard cancel is good enough.
+            MainProgressBar.Visibility = Visibility.Visible;
+            MainProgressBar.IsIndeterminate = false;
+            MainProgressBar.Value = 0;
+            MainProgressBar.Foreground = UpdateColor;
+            _downloadSupportsPauseResume = false;
+            CancelDownloadButton.Content = "";
+            CancelDownloadButton.ToolTip = "Cancel";
+            CancelDownloadButton.Visibility = Visibility.Visible;
+
+            _downloadCts = new CancellationTokenSource();
+            string installerPath;
+            try
+            {
+                var progress = new Progress<InstallProgress>(OnInstallProgress);
+                installerPath = await _launcherUpdate.DownloadInstallerAsync(update.DownloadUrl, update.Sha256, _downloadCts.Token, progress);
+            }
+            catch (OperationCanceledException)
+            {
+                ShowGlobalToast("Update download cancelled.", ToastSeverity.Warning);
+                return;
+            }
+            finally
+            {
+                MainProgressBar.Visibility = Visibility.Collapsed;
+                CancelDownloadButton.Visibility = Visibility.Collapsed;
+                ProgressStatusText.Text = string.Empty;
+                _downloadCts?.Dispose();
+                _downloadCts = null;
+            }
+
+            // UseShellExecute triggers the installer's own admin-rights prompt; Close() (not
+            // Environment.Exit/Process.Kill) goes through the normal OnWindowClosing/App.OnExit path
+            // so the single-instance mutex releases and settings flush before the installer runs.
+            Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
+            Close();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"Launcher update check failed: {ex.Message}");
+            ShowGlobalToast("Update check failed — see the Log tab.", ToastSeverity.Error);
+        }
+    }
+
+    /// <summary>
+    /// Shows what changed in this version once, the first time it runs after an update (detected by
+    /// comparing against the last version this popup was shown for). Silent on first-ever run — with
+    /// no prior version recorded there's nothing to compare against, so it just records the baseline.
+    /// </summary>
+    private async Task ShowWhatsNewIfNeededAsync()
+    {
+        string current = AppInfo.Version;
+        string? lastSeen = _settings.Current.LastSeenVersion;
+
+        if (lastSeen is not null && !string.Equals(lastSeen, current, StringComparison.Ordinal))
+        {
+            try
+            {
+                string changelog = await DocsHttp.GetStringAsync(ChangelogUrl);
+                string? section = ExtractChangelogSection(changelog, current);
+                if (section is not null)
+                {
+                    ShowModal(new MarkdownPreviewDialog($"What's new in v{current}", section));
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Warn($"Could not load the \"what's new\" changelog section: {ex.Message}");
+            }
+        }
+
+        _settings.Current.LastSeenVersion = current;
+        _settings.Save();
+    }
+
+    /// <summary>Slices out one version's own section from the full CHANGELOG.md text — from its
+    /// "## [X.Y.Z] - date" header (kept, since it carries the release date the dialog's own title
+    /// doesn't) up to (not including) the next "## [" header.</summary>
+    private static string? ExtractChangelogSection(string changelog, string version)
+    {
+        Match match = Regex.Match(
+            changelog,
+            $@"^## \[{Regex.Escape(version)}\].*?(?=^## \[|\z)",
+            RegexOptions.Multiline | RegexOptions.Singleline);
+        return match.Success ? match.Value.Trim() : null;
     }
 
     // ---------------- Play / Install / Update ----------------
@@ -1718,7 +2620,7 @@ public partial class MainWindow : Window
         }
 
         UpdateCheckResult check = await _install.CheckForUpdateAsync(
-            CurrentClientUrl(), _settings.Current.InstalledClientSignature, CancellationToken.None);
+            CurrentClientUrl(), _dirSettings.Current.InstalledClientSignature, CancellationToken.None);
         _pendingUpdateCheck = check;
         SetPlayState(check.UpdateAvailable ? PlayButtonState.Update : PlayButtonState.Play);
     }
@@ -1741,7 +2643,11 @@ public partial class MainWindow : Window
 
     private async Task RunInstallFlowAsync()
     {
-        string defaultDir = !string.IsNullOrWhiteSpace(GameFolderBox.Text) ? GameFolderBox.Text.Trim() : AppContext.BaseDirectory;
+        // No AppContext.BaseDirectory fallback here - the launcher's own location has nothing to do
+        // with any WoW directory (it can be installed anywhere, including Program Files), so an
+        // empty default is correct when nothing's configured yet; InstallDialog already requires the
+        // user to pick/confirm a folder either way.
+        string defaultDir = GameFolderBox.Text.Trim();
         var dialog = new InstallDialog(defaultDir);
         if (ShowModal(dialog) != true)
         {
@@ -1749,7 +2655,22 @@ public partial class MainWindow : Window
         }
 
         string targetDir = dialog.SelectedFolder;
-        bool ok = await RunClientDownloadAsync(targetDir, "Client installed.", "Install failed");
+
+        // An existing, verified 1.12.1 client already sitting in the chosen folder gets adopted as-is
+        // instead of blindly re-downloaded over - the user pointing the launcher at a folder that
+        // already has a valid client should verify it, not clobber it.
+        bool alreadyValid = _install.IsInstalled(targetDir) && _install.IsUpToDate(targetDir);
+        bool ok;
+        if (alreadyValid)
+        {
+            ok = true;
+            ShowGlobalToast("Existing 1.12.1 client verified — using it as-is.", ToastSeverity.Success);
+        }
+        else
+        {
+            ok = await RunClientDownloadAsync(targetDir, "Client installed.", "Install failed", InstallColor);
+        }
+
         if (ok)
         {
             _settings.Current.WowDirectory = targetDir;
@@ -1762,10 +2683,26 @@ public partial class MainWindow : Window
             _lastAppliedWowDir = targetDir;
 
             UpdateGameFolderHint();
+            // Load/reload directory-scoped state before anything below reads from it - RefreshDetectedDlls
+            // and RefreshIgnoredDllList both depend on _dirSettings.Current.IgnoredDetectedDlls, which
+            // otherwise would still reflect whichever directory was active before this install.
+            _dirSettings.Load(targetDir);
+            LoadDirectorySettingsIntoUi();
+            RecordManagedDirectory(targetDir);
             RefreshDllList();
             RefreshDetectedDlls();
+            RefreshIgnoredDllList();
             RefreshMpqList();
+            _addons.Load(targetDir);
             RefreshAddonList();
+
+            // Only needed for the adopt path - RunClientDownloadAsync (the download path, above)
+            // already refreshes the Play button state itself on success, so calling it
+            // unconditionally here re-did that same remote version check a second time in a row.
+            if (alreadyValid)
+            {
+                await RefreshPlayButtonStateAsync();
+            }
         }
     }
 
@@ -1783,53 +2720,226 @@ public partial class MainWindow : Window
             return;
         }
 
-        await RunClientDownloadAsync(CurrentWowDir(), "Client updated.", "Update failed");
+        await RunClientDownloadAsync(CurrentWowDir(), "Client updated.", "Update failed", UpdateColor);
     }
 
-    private async Task<bool> RunClientDownloadAsync(string targetDir, string successMessage, string failureMessage)
+    // color follows which flow is actually running (issue #13) - previously always green regardless
+    // of Install/Update/Repair, which read as though every one of those was the same action.
+    //
+    // Pause/Resume rather than a hard Cancel: GameInstallService.DownloadAndInstallAsync already
+    // resumes a partial download via HTTP Range requests against a fixed temp filename, so
+    // cancelling the in-flight request and later re-calling this same method with the same
+    // arguments transparently continues from where it left off - no new resume logic needed, just
+    // UI that doesn't tear itself down on a "pause".
+    private async Task<bool> RunClientDownloadAsync(string targetDir, string successMessage, string failureMessage, Brush color)
     {
         SetLaunchOperationBusy(true);
         MainProgressBar.Visibility = Visibility.Visible;
         MainProgressBar.IsIndeterminate = false;
-        MainProgressBar.Value = 0;
+        MainProgressBar.Foreground = color;
+        _downloadSupportsPauseResume = true;
+        SetPauseResumeGlyph(paused: false);
+        PauseResumeButton.Visibility = Visibility.Visible;
+        CancelDownloadButton.Visibility = Visibility.Visible;
 
+        _downloadCts = new CancellationTokenSource();
         try
         {
             var progress = new Progress<InstallProgress>(OnInstallProgress);
-            string? signature = await _install.DownloadAndInstallAsync(CurrentClientUrl(), targetDir, progress, CancellationToken.None);
-            _settings.Current.InstalledClientSignature = signature;
-            _settings.Save();
-            UpdateStatus(successMessage);
+            string? signature = await _install.DownloadAndInstallAsync(CurrentClientUrl(), targetDir, progress, _downloadCts.Token);
+            _dirSettings.Current.InstalledClientSignature = signature;
+            _dirSettings.Save(targetDir);
+            ShowGlobalToast(successMessage, ToastSeverity.Success);
             await RefreshPlayButtonStateAsync();
             return true;
+        }
+        catch (OperationCanceledException)
+        {
+            if (_downloadPaused)
+            {
+                // Deliberately skip the finally block's teardown (see below) - the bar, its text,
+                // and PauseResumeButton (now showing Resume) all stay visible so the user can pick
+                // this same download back up. The partial file is deliberately left alone here
+                // (unlike a hard Cancel via OnCancelDownloadClick) so Resume can continue from it.
+                ProgressStatusText.Text += " — paused";
+                _pausedDownloadParams = (targetDir, successMessage, failureMessage, color);
+                return false;
+            }
+
+            _install.DeletePartialDownload();
+            ShowGlobalToast("Download cancelled.", ToastSeverity.Warning);
+            return false;
         }
         catch (Exception ex)
         {
             _log.Error($"{failureMessage}.", ex);
-            UpdateStatus($"{failureMessage} — see the Log tab.");
+            ShowGlobalToast($"{failureMessage} — see the Log tab.", ToastSeverity.Error);
             return false;
         }
         finally
         {
-            MainProgressBar.Visibility = Visibility.Collapsed;
-            SetLaunchOperationBusy(false);
+            _downloadCts.Dispose();
+            _downloadCts = null;
+
+            if (!_downloadPaused)
+            {
+                MainProgressBar.Visibility = Visibility.Collapsed;
+                PauseResumeButton.Visibility = Visibility.Collapsed;
+                CancelDownloadButton.Visibility = Visibility.Collapsed;
+                ProgressStatusText.Text = string.Empty;
+                SetLaunchOperationBusy(false);
+            }
         }
     }
 
-    private void OnInstallProgress(InstallProgress p)
+    private void SetPauseResumeGlyph(bool paused)
     {
-        if (p.Extracting)
+        PauseResumeButton.Content = paused ? "" : ""; // Play (Resume) : Pause
+        PauseResumeButton.ToolTip = paused ? "Resume" : "Pause";
+    }
+
+    // Only ever wired up while _downloadSupportsPauseResume is true (the client download flow) -
+    // the self-update download hides this button entirely, so there's no "not resumable" branch.
+    private void OnPauseResumeClick(object sender, RoutedEventArgs e)
+    {
+        if (_downloadPaused)
         {
-            MainProgressBar.IsIndeterminate = true;
-            UpdateStatus("Extracting client...");
+            _downloadPaused = false;
+            SetPauseResumeGlyph(paused: false);
+            if (_pausedDownloadParams is { } p)
+            {
+                _pausedDownloadParams = null;
+                _ = RunClientDownloadAsync(p.TargetDir, p.SuccessMessage, p.FailureMessage, p.Color);
+            }
+        }
+        else
+        {
+            _downloadPaused = true;
+            SetPauseResumeGlyph(paused: true);
+            _downloadCts?.Cancel();
+        }
+    }
+
+    /// <summary>
+    /// Permanently stops the current download and deletes any partial file - unlike Pause, which
+    /// deliberately leaves the partial file alone so Resume can continue it. Handles both cases: a
+    /// download actively in flight (has a live _downloadCts - cancelling it routes through
+    /// RunClientDownloadAsync's/the self-update flow's own catch block, which now sees
+    /// _downloadPaused=false and does the delete+teardown there) and one already paused (no active
+    /// CTS/Task to catch anything, so this does the teardown directly instead).
+    /// </summary>
+    private async void OnCancelDownloadClick(object sender, RoutedEventArgs e)
+    {
+        var confirm = new ConfirmDialog(
+            "Cancel Download",
+            "This stops the download and deletes the partial file — resuming later will have to start " +
+            "over from the beginning instead of picking up where this left off. Continue?",
+            confirmText: "Cancel Download",
+            cancelText: "Keep Downloading",
+            confirmBrush: (Brush)FindResource("RemoveActionBrush"),
+            cancelBrush: (Brush)FindResource("AddActionBrush"));
+        if (ShowModal(confirm) != true)
+        {
             return;
         }
 
+        CancelDownload();
+    }
+
+    /// <summary>
+    /// Permanently stops the current download and deletes any partial file - unlike Pause, which
+    /// deliberately leaves the partial file alone so Resume can continue it. Handles both cases: a
+    /// download actively in flight (has a live _downloadCts - cancelling it routes through
+    /// RunClientDownloadAsync's/the self-update flow's own catch block, which now sees
+    /// _downloadPaused=false and does the delete+teardown there) and one already paused (no active
+    /// CTS/Task to catch anything, so this does the teardown directly instead). Deliberately not
+    /// where confirmation lives - the button click handler above asks first; this is also called
+    /// internally when the WoW directory changes out from under an in-flight download, where a
+    /// confirm prompt would be the wrong UX (nothing the user directly asked for).
+    /// </summary>
+    private void CancelDownload()
+    {
+        bool wasPaused = _downloadPaused;
+        _downloadPaused = false;
+
+        if (_downloadCts is not null)
+        {
+            _downloadCts.Cancel();
+            return;
+        }
+
+        if (wasPaused && _pausedDownloadParams is not null)
+        {
+            _pausedDownloadParams = null;
+            _install.DeletePartialDownload();
+            MainProgressBar.Visibility = Visibility.Collapsed;
+            PauseResumeButton.Visibility = Visibility.Collapsed;
+            CancelDownloadButton.Visibility = Visibility.Collapsed;
+            ProgressStatusText.Text = string.Empty;
+            SetLaunchOperationBusy(false);
+            ShowGlobalToast("Download cancelled.", ToastSeverity.Warning);
+        }
+    }
+
+    /// <summary>
+    /// Force-stops whichever client download is active/paused, including deleting its partial file -
+    /// called when the WoW directory changes out from under it (switching directories with a
+    /// download queued previously did nothing, silently continuing against the directory the UI no
+    /// longer points to). Never touches the launcher's own self-update download, which isn't tied to
+    /// any WoW directory at all.
+    /// </summary>
+    private void ForceStopClientDownloadForDirectoryChange()
+    {
+        if (_downloadSupportsPauseResume && (_downloadCts is not null || _pausedDownloadParams is not null))
+        {
+            CancelDownload();
+        }
+    }
+
+    // Reused by both the client download flow above and the launcher self-update download
+    // (CheckForLauncherUpdateAsync) - writes to ProgressStatusText (attached directly to
+    // MainProgressBar) rather than a toast, since this fires continuously throughout one operation
+    // rather than representing a single event.
+    private void OnInstallProgress(InstallProgress p)
+    {
         MainProgressBar.IsIndeterminate = false;
         double pct = p.Total > 0 ? (double)p.Downloaded / p.Total * 100 : 0;
         MainProgressBar.Value = pct;
-        string speed = p.BytesPerSecond > 0 ? $" — {FormatBytes((long)p.BytesPerSecond)}/s" : string.Empty;
-        UpdateStatus($"Downloading {pct:0}%  ({FormatBytes(p.Downloaded)} / {FormatBytes(p.Total)}){speed}");
+
+        // Speed and ETA both come from the same InstallProgress.BytesPerSecond, so this covers every
+        // caller uniformly - client download/repair/update, extraction, and the launcher's own
+        // self-update download all report through this one method.
+        string[] parts = {
+            p.BytesPerSecond > 0 ? $"{FormatBytes((long)p.BytesPerSecond)}/s" : string.Empty,
+            FormatEta(p.Total - p.Downloaded, p.BytesPerSecond),
+        };
+        string suffix = string.Join(", ", Array.FindAll(parts, s => s.Length > 0));
+        if (suffix.Length > 0)
+        {
+            suffix = $" — {suffix}";
+        }
+
+        string verb = p.Extracting ? "Extracting" : "Downloading";
+        ProgressStatusText.Text = $"{verb} {pct:0}%  ({FormatBytes(p.Downloaded)} / {FormatBytes(p.Total)}){suffix}";
+    }
+
+    /// <summary>"2m 15s left" style estimate from the remaining bytes and current rate — empty once
+    /// there's nothing meaningful to estimate from (no rate yet, or nothing left).</summary>
+    private static string FormatEta(long remainingBytes, double bytesPerSecond)
+    {
+        if (bytesPerSecond <= 0 || remainingBytes <= 0)
+        {
+            return string.Empty;
+        }
+
+        TimeSpan remaining = TimeSpan.FromSeconds(remainingBytes / bytesPerSecond);
+        string text = remaining.TotalHours >= 1
+            ? $"{(int)remaining.TotalHours}h {remaining.Minutes}m"
+            : remaining.TotalMinutes >= 1
+                ? $"{(int)remaining.TotalMinutes}m {remaining.Seconds}s"
+                : $"{Math.Max(1, remaining.Seconds)}s";
+
+        return $"{text} left";
     }
 
     private static string FormatBytes(long bytes)
@@ -1854,17 +2964,18 @@ public partial class MainWindow : Window
         {
             _wowAlreadyRunning = true;
             UpdatePlayButtonEnabled();
-            UpdateStatus("WoW is already running from this game folder — close it first.");
+            ShowGlobalToast("WoW is already running from this game folder — close it first.", ToastSeverity.Warning);
             return;
         }
 
         CollectSettingsFromUi();
         _settings.Save();
+        _dirSettings.Save(CurrentWowDir());
 
         // Last-chance guard, independent of which tab the user was actually looking at: launching in
         // this state doesn't degrade gracefully, it makes WoW refuse to start entirely (a "corrupted
         // Data folder" error), so this is caught here even if both tab warnings went unnoticed.
-        bool signatureRemovalEnabled = _settings.Current.EnabledPatchIds.Contains("signature-removal");
+        bool signatureRemovalEnabled = _dirSettings.Current.EnabledPatchIds.Contains("signature-removal");
         int activeMpqCount = _mpq.Scan(CurrentWowDir()).Count(p => p.Enabled);
         if (!signatureRemovalEnabled && activeMpqCount > 0)
         {
@@ -1878,7 +2989,7 @@ public partial class MainWindow : Window
                 cancelText: "Cancel");
             if (ShowModal(confirm) != true)
             {
-                UpdateStatus("Launch cancelled — resolve the Signature Removal / MPQ patch conflict first.");
+                ShowGlobalToast("Launch cancelled — resolve the Signature Removal / MPQ patch conflict first.", ToastSeverity.Warning);
                 return;
             }
 
@@ -1890,25 +3001,26 @@ public partial class MainWindow : Window
 
             CollectSettingsFromUi();
             _settings.Save();
+            _dirSettings.Save(CurrentWowDir());
             RefreshSignatureMpqWarning();
         }
 
-        if (_settings.Current.CleanWdbBeforeLaunch)
+        if (_dirSettings.Current.CleanWdbBeforeLaunch)
         {
             _gameCache.Clear(CurrentWowDir());
         }
 
         SetLaunchOperationBusy(true);
-        var progress = new Progress<string>(UpdateStatus);
+        var progress = new Progress<string>(msg => ShowGlobalToast(msg, ToastSeverity.Info));
         try
         {
             PlayResult result = await _orchestrator.PlayAsync(progress, OnGameProcessLaunched);
-            UpdateStatus(result.Success ? "Launched." : "Launch failed — see the Log tab.");
+            ShowGlobalToast(result.Success ? "Launched." : "Launch failed — see the Log tab.", result.Success ? ToastSeverity.Success : ToastSeverity.Error);
         }
         catch (Exception ex)
         {
             _log.Error("Unexpected error during launch.", ex);
-            UpdateStatus("Launch failed — see the Log tab.");
+            ShowGlobalToast("Launch failed — see the Log tab.", ToastSeverity.Error);
         }
         finally
         {
@@ -1948,9 +3060,210 @@ public partial class MainWindow : Window
         }
     }
 
-    // ---------------- Shared ----------------
+    // ---------------- Toasts (issue #13) ----------------
 
-    private void UpdateStatus(string message) => StatusText.Text = message;
+    private static readonly TimeSpan ToastFadeDuration = TimeSpan.FromMilliseconds(180);
+    private static readonly TimeSpan ToastAutoDismissDelay = TimeSpan.FromSeconds(4);
+
+    private Brush SeverityBrush(ToastSeverity severity) => (Brush)FindResource(severity switch
+    {
+        ToastSeverity.Success => "AddActionBrush",
+        ToastSeverity.Warning => "UpdateActionBrush",
+        ToastSeverity.Error => "RemoveActionBrush",
+        _ => "InstallActionBrush",
+    });
+
+    private static void FadeTo(UIElement element, double to, Action? onCompleted = null)
+    {
+        var animation = new DoubleAnimation(to, ToastFadeDuration);
+        if (onCompleted is not null)
+        {
+            animation.Completed += (_, _) => onCompleted();
+        }
+
+        element.BeginAnimation(UIElement.OpacityProperty, animation);
+    }
+
+    // ---- Global toast: single-slot, replaces the footer's old plain StatusText TextBlock ----
+
+    private DispatcherTimer? _globalToastTimer;
+
+    private void ShowGlobalToast(string message, ToastSeverity severity)
+    {
+        _globalToastTimer?.Stop();
+
+        GlobalToastText.Text = message;
+        GlobalToastBorder.BorderBrush = SeverityBrush(severity);
+        // Unconditional, not gated on current Visibility: a message arriving while the previous one
+        // is still mid fade-out (BeginAnimation replaces the in-flight animation on the same
+        // property) would otherwise keep fading toward 0 instead of showing the new one.
+        GlobalToastBorder.Visibility = Visibility.Visible;
+        FadeTo(GlobalToastBorder, 1);
+
+        if (severity is ToastSeverity.Info or ToastSeverity.Success)
+        {
+            _globalToastTimer = new DispatcherTimer { Interval = ToastAutoDismissDelay };
+            _globalToastTimer.Tick += (_, _) =>
+            {
+                _globalToastTimer!.Stop();
+                DismissGlobalToast();
+            };
+            _globalToastTimer.Start();
+        }
+    }
+
+    private void DismissGlobalToast()
+    {
+        _globalToastTimer?.Stop();
+        FadeTo(GlobalToastBorder, 0, () => GlobalToastBorder.Visibility = Visibility.Collapsed);
+    }
+
+    private void OnCloseGlobalToast(object sender, RoutedEventArgs e) => DismissGlobalToast();
+
+    // ---- Tab toast: stack of up to 5 cards floating over the active top-level tab ----
+
+    private const int MaxTabToastCards = 5;
+
+    private sealed class TabToastCard
+    {
+        public required Border Border { get; init; }
+        public required TextBlock MessageText { get; init; }
+        public required int TabIndex { get; init; }
+        public string? UpdateKey { get; init; }
+        public DispatcherTimer? Timer { get; set; }
+    }
+
+    private readonly List<TabToastCard> _tabToastCards = new();
+
+    /// <summary>
+    /// updateKey lets a rapidly-repeating operation (e.g. "Loading catalog… (N so far)" while
+    /// paging Warperia) update one card in place instead of flooding the 5-slot stack with
+    /// near-duplicate entries - omit it for the common case of one distinct, finished event.
+    /// </summary>
+    private void ShowTabToast(string message, ToastSeverity severity, string? updateKey = null)
+    {
+        if (updateKey is not null)
+        {
+            TabToastCard? existing = _tabToastCards.FirstOrDefault(c => c.UpdateKey == updateKey);
+            if (existing is not null)
+            {
+                existing.MessageText.Text = message;
+                existing.Border.BorderBrush = SeverityBrush(severity);
+                RestartTabToastTimer(existing, severity);
+                return;
+            }
+        }
+
+        if (_tabToastCards.Count >= MaxTabToastCards)
+        {
+            RemoveTabToastCard(_tabToastCards[0]);
+        }
+
+        TabToastCard card = CreateTabToastCard(message, severity, updateKey);
+        _tabToastCards.Add(card);
+        TabToastHost.Children.Add(card.Border);
+        FadeTo(card.Border, 1);
+        RestartTabToastTimer(card, severity);
+    }
+
+    private TabToastCard CreateTabToastCard(string message, ToastSeverity severity, string? updateKey)
+    {
+        var messageText = new TextBlock
+        {
+            Text = message,
+            Style = (Style)FindResource("CaptionText"),
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 360,
+        };
+
+        var closeButton = new Button
+        {
+            Content = "", // Segoe Fluent Icons: small X ("Cancel"), matches the search-box clear button glyph
+            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            FontSize = 10,
+            Foreground = (Brush)new BrushConverter().ConvertFromString("#9A9AA2")!,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Arrow,
+            Width = 16,
+            Height = 16,
+            Margin = new Thickness(8, 0, 0, 0),
+        };
+        DockPanel.SetDock(closeButton, Dock.Right);
+
+        var content = new DockPanel();
+        content.Children.Add(closeButton);
+        content.Children.Add(messageText);
+
+        var border = new Border
+        {
+            Background = (Brush)new BrushConverter().ConvertFromString("#1B1B1F")!,
+            BorderBrush = SeverityBrush(severity),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10, 8, 10, 8),
+            Margin = new Thickness(0, 4, 0, 0),
+            Opacity = 0,
+            Child = content,
+        };
+
+        var card = new TabToastCard
+        {
+            Border = border,
+            MessageText = messageText,
+            TabIndex = MainTabs.SelectedIndex,
+            UpdateKey = updateKey,
+        };
+
+        closeButton.Click += (_, _) => RemoveTabToastCard(card);
+        return card;
+    }
+
+    private void RestartTabToastTimer(TabToastCard card, ToastSeverity severity)
+    {
+        card.Timer?.Stop();
+        card.Timer = null;
+
+        if (severity is not (ToastSeverity.Info or ToastSeverity.Success))
+        {
+            return;
+        }
+
+        card.Timer = new DispatcherTimer { Interval = ToastAutoDismissDelay };
+        card.Timer.Tick += (_, _) =>
+        {
+            card.Timer!.Stop();
+            RemoveTabToastCard(card);
+        };
+        card.Timer.Start();
+    }
+
+    private void RemoveTabToastCard(TabToastCard card)
+    {
+        card.Timer?.Stop();
+        _tabToastCards.Remove(card);
+        FadeTo(card.Border, 0, () => TabToastHost.Children.Remove(card.Border));
+    }
+
+    // Tab toasts don't follow the user or persist for later - switching top-level tabs immediately
+    // fades out every card that doesn't belong to the newly-selected tab, deliberately, to avoid
+    // recreating the "message shown on the wrong tab" bug this whole feature originated from.
+    private void OnMainTabsSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (e.Source != MainTabs)
+        {
+            return;
+        }
+
+        int activeIndex = MainTabs.SelectedIndex;
+        foreach (TabToastCard card in _tabToastCards.Where(c => c.TabIndex != activeIndex).ToList())
+        {
+            RemoveTabToastCard(card);
+        }
+    }
+
+    // ---------------- Shared ----------------
 
     // Caps _logItems so a long play session can't grow it without bound — Logger's own per-day log
     // file on disk is a separate, complete record and is unaffected by this trim.
@@ -1970,14 +3283,27 @@ public partial class MainWindow : Window
         });
     }
 
-    private void OnClearLog(object sender, RoutedEventArgs e) => _logItems.Clear();
+    private void OnClearLog(object sender, RoutedEventArgs e)
+    {
+        _logItems.Clear();
+        ShowTabToast("Log view cleared.", ToastSeverity.Success);
+    }
 
     private void OnCopyLog(object sender, RoutedEventArgs e)
     {
         string text = string.Join(
             Environment.NewLine,
             _logItems.Select(entry => $"{entry.Timestamp:HH:mm:ss} [{entry.LevelDisplay}] {entry.Message}"));
-        try { Clipboard.SetText(text); } catch { /* clipboard can be transiently locked by another app */ }
+        try
+        {
+            Clipboard.SetText(text);
+            ShowTabToast("Log copied to clipboard.", ToastSeverity.Success);
+        }
+        catch
+        {
+            // clipboard can be transiently locked by another app
+            ShowTabToast("Could not copy the log - clipboard may be in use by another app.", ToastSeverity.Error);
+        }
     }
 
     private void OnOpenLogFolder(object sender, RoutedEventArgs e)

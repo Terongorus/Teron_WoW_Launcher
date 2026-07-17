@@ -1,4 +1,4 @@
-using TeronWoWLauncher.Services;
+using TeronWoWLauncher.Services.Core;
 
 namespace TeronWoWLauncher.Models;
 

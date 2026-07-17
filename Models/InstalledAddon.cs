@@ -11,6 +11,12 @@ public enum AddonSourceKind
 
     /// <summary>Adopted from a folder that was already present in AddOns (installed outside the launcher).</summary>
     Manual,
+
+    // Appended, not inserted before Manual - SourceKind serializes as a raw int (no string enum
+    // converter), so any existing addons.json on disk already has real 0/1/2 values baked in;
+    // inserting a new value earlier in this list would silently reinterpret every already-installed
+    // addon's stored SourceKind as the wrong kind.
+    GitLab,
 }
 
 /// <summary>A tracked addon installed into Interface\AddOns, persisted in addons.json.</summary>
@@ -47,4 +53,22 @@ public sealed class InstalledAddon
 
     [JsonIgnore]
     public string VersionDisplay => string.IsNullOrEmpty(Version) ? string.Empty : $"v{Version}";
+
+    /// <summary>
+    /// Human-facing source name shown in the addon list. GitHub/GitLab/Manual map straight from
+    /// SourceKind, but Archive alone doesn't say enough - LegacyWowAddonSource and WarperiaAddonSource
+    /// both resolve down to a plain archive download and report Kind=Archive too (see their own doc
+    /// comments), so the actual site has to be read back out of SourceRef's host. A generic direct
+    /// archive URL or local file path (no recognized host) is "Local", same as a Manual adoption -
+    /// both mean "no site the launcher can re-check for updates through its own source resolvers."
+    /// </summary>
+    [JsonIgnore]
+    public string SourceLabel => SourceKind switch
+    {
+        AddonSourceKind.GitHub => "GitHub",
+        AddonSourceKind.GitLab => "GitLab",
+        AddonSourceKind.Archive when SourceRef?.Contains("warperia.com", StringComparison.OrdinalIgnoreCase) == true => "Warperia",
+        AddonSourceKind.Archive when SourceRef?.Contains("legacy-wow.com", StringComparison.OrdinalIgnoreCase) == true => "LegacyWoW",
+        _ => "Local",
+    };
 }

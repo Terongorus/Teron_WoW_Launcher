@@ -8,7 +8,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using LibGit2Sharp;
 using TeronWoWLauncher.Models;
-using TeronWoWLauncher.Services;
+using TeronWoWLauncher.Services.Addons;
+using TeronWoWLauncher.Services.Core;
+using TeronWoWLauncher.Services.Dlls;
+using TeronWoWLauncher.Services.Launch;
+using TeronWoWLauncher.Services.Patching;
+using TeronWoWLauncher.Services.UI;
 
 namespace TeronWoWLauncher.Sources;
 
@@ -41,16 +46,21 @@ public sealed class GitHubAddonSource : IAddonSource
         (string owner, string repo) = ParseOwnerRepo(input);
         string cloneUrl = $"https://github.com/{owner}/{repo}.git";
         string cacheDir = AddonPaths.AddonRepoCacheDir(owner, repo);
+        string contentDir = Path.Combine(Path.GetTempPath(), $"teronwow_addon_{Guid.NewGuid():N}");
 
+        // Off the calling thread deliberately - both the clone/fetch and the working-tree copy are
+        // synchronous LibGit2Sharp/file I/O with no await in them, and DownloadAsync is always
+        // awaited directly from the UI thread (AddonLibrary.AddAsync). The clone alone was already
+        // backgrounded, but the copy step wasn't, which could still noticeably freeze the window for
+        // a large repo.
         string headSha = await Task.Run(() =>
         {
             ct.ThrowIfCancellationRequested();
             using Repository repo2 = EnsureUpToDateClone(cloneUrl, cacheDir);
-            return repo2.Head.Tip.Sha;
+            string sha = repo2.Head.Tip.Sha;
+            CopyWorkingTree(cacheDir, contentDir);
+            return sha;
         }, ct);
-
-        string contentDir = Path.Combine(Path.GetTempPath(), $"teronwow_addon_{Guid.NewGuid():N}");
-        CopyWorkingTree(cacheDir, contentDir);
 
         return new AddonDownload(contentDir, repo, headSha, AddonSourceKind.GitHub, $"https://github.com/{owner}/{repo}");
     }
@@ -152,6 +162,12 @@ public sealed class GitHubAddonSource : IAddonSource
     /// <summary>Copies a git working tree into a fresh directory, leaving the ".git" folder behind.</summary>
     private static void CopyWorkingTree(string source, string dest)
     {
+        string destFull = Path.GetFullPath(dest);
+        if (!destFull.EndsWith(Path.DirectorySeparatorChar))
+        {
+            destFull += Path.DirectorySeparatorChar;
+        }
+
         Directory.CreateDirectory(dest);
         foreach (string dir in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
         {
@@ -160,7 +176,7 @@ public sealed class GitHubAddonSource : IAddonSource
                 continue;
             }
 
-            Directory.CreateDirectory(dir.Replace(source, dest));
+            Directory.CreateDirectory(ResolveDestPath(source, dir, destFull));
         }
 
         foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
@@ -171,8 +187,27 @@ public sealed class GitHubAddonSource : IAddonSource
                 continue;
             }
 
-            File.Copy(file, file.Replace(source, dest), overwrite: true);
+            File.Copy(file, ResolveDestPath(source, file, destFull), overwrite: true);
         }
+    }
+
+    /// <summary>
+    /// Resolves an entry under source to its counterpart under dest via its relative path (not a
+    /// plain entryPath.Replace(source, dest), which could behave surprisingly if source ever happened
+    /// to appear as a substring elsewhere in a nested path - the same fix already applied to
+    /// AddonInstaller.CopyDirectory), then verifies the result actually lands inside dest.
+    /// </summary>
+    private static string ResolveDestPath(string source, string entryPath, string destFullWithSep)
+    {
+        string relative = Path.GetRelativePath(source, entryPath);
+        string resolved = Path.GetFullPath(Path.Combine(destFullWithSep, relative));
+        if (!resolved.StartsWith(destFullWithSep, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Refusing to copy '{entryPath}' — its resolved destination falls outside the destination folder.");
+        }
+
+        return resolved;
     }
 
     private static bool IsUnderGitDir(string root, string dir)

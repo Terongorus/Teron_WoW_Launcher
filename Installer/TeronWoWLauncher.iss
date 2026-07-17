@@ -14,7 +14,7 @@
 ; comment in TeronWoWLauncher.csproj. There is no x64 build of this app to package.
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.12.0"
+  #define MyAppVersion "2.0.0-beta.1"
 #endif
 
 #define MyAppName "Teron WoW Launcher"
@@ -51,14 +51,15 @@ SelectDirDesc=Where is your World of Warcraft (1.12.1) folder?
 SelectDirLabel3=Setup will install {#MyAppName} into the folder that contains your WoW.exe - browse to it below (not a Program Files location). This is required for the launcher to find and patch the game.
 
 [Tasks]
+Name: "startmenuicon"; Description: "Create a &Start Menu shortcut"; GroupDescription: "Additional shortcuts:"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"
 
 [Files]
 Source: "{#MyPublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: startmenuicon
+Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"; Tasks: startmenuicon
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]

@@ -29,8 +29,8 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0" Style="{StaticResource Heading2Text}" Text="A different client archive is available"
-                           Margin="0,0,0,10"/>
+                <TextBlock Grid.Row="0" x:Name="TitleText" Style="{StaticResource Heading2Text}"
+                           TextWrapping="Wrap" Margin="0,0,0,10"/>
 
                 <Border Grid.Row="1" Background="#1B1B1F" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6" Padding="12">
                     <TextBlock x:Name="DetailText" Style="{StaticResource BodyText}" TextWrapping="Wrap" VerticalAlignment="Top"/>
