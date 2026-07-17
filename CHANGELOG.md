@@ -37,6 +37,10 @@ Versions follow major.minor.hotfix (e.g. 1.2.3).
   immediately on a single click.
 - GitLab repo URLs are now supported as an addon source alongside GitHub — paste a
   `gitlab.com/...` repo link and it installs and tracks for updates the same way.
+- Add/Install/Update/Remove icon buttons now use a consistent color across every tab (DLLs, MPQ
+  Patches, Addons Installed and Browse) matching the Play button's own state palette — green for
+  Add, blue for Install, gold for Update, and a new red for Remove/Uninstall — instead of most of
+  them sharing the same plain neutral gray as unrelated actions like Refresh.
 - The installer now offers a Start Menu shortcut checkbox alongside the existing desktop shortcut
   one, so either can be turned off independently instead of always creating a Start Menu entry.
 
