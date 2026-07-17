@@ -35,6 +35,8 @@ Versions follow major.minor.hotfix (e.g. 1.2.3).
   take.
 - Canceling an in-progress download now asks for confirmation first, instead of stopping
   immediately on a single click.
+- GitLab repo URLs are now supported as an addon source alongside GitHub — paste a
+  `gitlab.com/...` repo link and it installs and tracks for updates the same way.
 - The installer now offers a Start Menu shortcut checkbox alongside the existing desktop shortcut
   one, so either can be turned off independently instead of always creating a Start Menu entry.
 
@@ -43,6 +45,12 @@ Versions follow major.minor.hotfix (e.g. 1.2.3).
 - Reorganized every service class into namespaced subfolders (`Services/Addons`, `Services/Core`,
   `Services/Dlls`, `Services/Launch`, `Services/Patching`, `Services/UI`) instead of one flat
   `Services` folder — no behavior change, purely internal organization.
+- Replaced the static per-tab and footer status labels with toast notifications: tab-scoped
+  messages now appear as a stack of up to 5 dismissible cards floating over the active tab, and
+  whole-launcher messages (overall status, directory-switch warnings) show as a single banner that
+  auto-dismisses for informational messages but stays until closed for warnings/errors. This also
+  fixes tab-scoped messages going invisible when triggered from a sub-tab (e.g. addon Browse) that
+  wasn't the one the old static label lived on.
 - Addon installs — copying a multi-folder local addon, extracting a downloaded archive, and
   copying a GitHub/GitLab-tracked addon's working tree — now run on a background thread instead
   of freezing the launcher window for the duration, matching the client installer's own behavior.

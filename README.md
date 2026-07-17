@@ -73,11 +73,11 @@ deleted). Blizzard's own base-game archives are never shown or touched.
 
 ### Addons
 
-Install addons the way that's actually convenient: paste a GitHub repo link, a Legacy-WoW or
-Warperia addon page link, a direct archive URL, or point at a `.zip`/`.rar`/`.7z` you already
-downloaded — or switch to the **Browse** sub-tab to search Legacy-WoW's and Warperia's full addon
-catalogs right inside the launcher, read each addon's own description, and install it in one click
-without ever leaving the app. Addon names render with their real in-game color codes, and versions
+Install addons the way that's actually convenient: paste a GitHub or GitLab repo link, a
+Legacy-WoW or Warperia addon page link, a direct archive URL, or point at a `.zip`/`.rar`/`.7z`
+you already downloaded — or switch to the **Browse** sub-tab to search Legacy-WoW's and
+Warperia's full addon catalogs right inside the launcher, read each addon's own description, and
+install it in one click without ever leaving the app. Addon names render with their real in-game color codes, and versions
 come straight from each addon's own `.toc` file rather than a
 GitHub release tag. Hitting **Refresh** does everything at once — checks every tracked addon for
 updates, and picks up any folder you dropped into `Interface\AddOns` by hand, prompting you before
