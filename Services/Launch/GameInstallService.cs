@@ -90,7 +90,10 @@ public sealed class GameInstallService
         File.Delete(manifestPath);
     }
 
-    /// <summary>The detected client version (e.g. "1.12.1"), or null if WoW.exe is absent.</summary>
+    /// <summary>The detected client version (e.g. "1.12.1"), or null if WoW.exe is absent or its
+    /// version resource can't be read (corrupt/zero-byte/mid-write/locked-by-AV file) - either way
+    /// treated the same as "not a verified install," which correctly routes the caller to
+    /// (re)download rather than blindly adopting a broken file in place.</summary>
     public string? GetClientVersion(string installDir)
     {
         string exe = Path.Combine(installDir, "WoW.exe");
@@ -99,8 +102,16 @@ public sealed class GameInstallService
             return null;
         }
 
-        FileVersionInfo vi = FileVersionInfo.GetVersionInfo(exe);
-        return $"{vi.FileMajorPart}.{vi.FileMinorPart}.{vi.FileBuildPart}";
+        try
+        {
+            FileVersionInfo vi = FileVersionInfo.GetVersionInfo(exe);
+            return $"{vi.FileMajorPart}.{vi.FileMinorPart}.{vi.FileBuildPart}";
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"Could not read WoW.exe's version info at {exe}: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>True when a correct 1.12.1 client is already installed.</summary>

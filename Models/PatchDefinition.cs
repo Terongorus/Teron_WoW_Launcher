@@ -63,6 +63,14 @@ public sealed class PatchDefinition
     public required string Description { get; init; }
     public required PatchCategory Category { get; init; }
 
+    /// <summary>
+    /// True for the small set of tweaks that should be grouped and labeled as required reading before
+    /// using custom MPQ patches (Signature Removal, Large Address Aware) - orthogonal to
+    /// <see cref="Category"/>, which only controls WoW.exe rebuild order. Purely a UI grouping/labeling
+    /// concern; it has no effect on patching behavior itself.
+    /// </summary>
+    public bool MandatoryForMpq { get; init; }
+
     /// <summary>Non-null when the patch exposes a numeric value to the user.</summary>
     public PatchParameter? Parameter { get; init; }
 

@@ -56,4 +56,17 @@ public sealed class DirectorySettings
     /// files that aren't actually meant for injection). Never offered again until un-ignored in Settings.
     /// </summary>
     public List<string> IgnoredDetectedDlls { get; set; } = new();
+
+    /// <summary>Forces the WTF/Config.WTF settings some HD/visual MPQ patches require (see
+    /// ConfigWtfService.RequiredSettings), re-applied at the start of every Play so it survives the
+    /// client's own rewrites of that file between sessions.</summary>
+    public bool ConfigWtfRewriteEnabled { get; set; }
+
+    /// <summary>
+    /// Each required Config.WTF key's value immediately before the toggle above last forced it (null
+    /// = the key didn't exist at all). Captured fresh every time the toggle goes off→on; consumed and
+    /// cleared when it goes on→off, so every on/off cycle restores exactly what it changed and nothing
+    /// from an earlier cycle.
+    /// </summary>
+    public Dictionary<string, string?> ConfigWtfOriginalValues { get; set; } = new();
 }

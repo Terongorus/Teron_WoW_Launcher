@@ -79,15 +79,33 @@ public sealed class AddonLibrary
         }
 
         string legacyPath = AddonPaths.LegacyGlobalAddonsFilePath;
-        if (!File.Exists(legacyPath))
+        string migratedMarkerPath = legacyPath + ".migrated";
+
+        // Once the legacy file has been migrated once (renamed to its own .migrated marker), it must
+        // never be copied into any OTHER directory again - checked BEFORE touching anything, not just
+        // relying on the rename below to fail safely. Confirmed as a real, reproducing bug
+        // (2026-07-19): a plain addons.json somehow reappeared at the legacy path after a legitimate
+        // first migration had already renamed the original one to its .migrated marker (root cause
+        // unconfirmed - likely a leftover from testing an interim build before this per-directory
+        // refactor was complete). Every directory created after that silently got a copy of that
+        // stale file, because the copy step below always succeeded while the rename step kept failing
+        // with "Cannot create a file when that file already exists" against the marker that was
+        // already there - the failure was only ever logged as a WARN, not surfaced, and never stopped
+        // the harmful copy that had already happened by that point.
+        if (File.Exists(migratedMarkerPath) || !File.Exists(legacyPath))
         {
             return;
         }
 
         try
         {
+            // Unlike AtomicFile.WriteAllText, a plain File.Copy doesn't create the destination
+            // directory itself - targetPath now lives inside PerDirectoryDataFolder's ".teronwow"
+            // subfolder, which may not exist yet for a directory that's never had any per-directory
+            // data file before.
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
             File.Copy(legacyPath, targetPath);
-            File.Move(legacyPath, legacyPath + ".migrated");
+            File.Move(legacyPath, migratedMarkerPath);
             _log.Info($"Migrated the old shared addons.json into {targetPath} (per-directory addon tracking).");
         }
         catch (Exception ex)
@@ -192,7 +210,10 @@ public sealed class AddonLibrary
         }
         finally
         {
-            try { DirectoryHelper.DeleteRecursive(download.ContentDir); } catch { /* temp cleanup best-effort */ }
+            // Off the calling thread for the same reason the install copy above is - this deletes
+            // the exact same temp content the copy just read, so it's just as capable of freezing
+            // the window for a large multi-folder addon.
+            try { await Task.Run(() => DirectoryHelper.DeleteRecursive(download.ContentDir)); } catch { /* temp cleanup best-effort */ }
         }
     }
 
@@ -376,28 +397,36 @@ public sealed class AddonLibrary
     private static bool LooksLikeCommitSha(string? s) => s is { Length: 40 } && s.All(Uri.IsHexDigit);
 
     /// <summary>Delete an addon's installed folders, its cached git clone (if any), and stop tracking it.</summary>
-    public void Remove(InstalledAddon addon, string wowDir)
+    public async Task RemoveAsync(InstalledAddon addon, string wowDir)
     {
         string addonsDir = AddonPaths.AddOnsDir(wowDir);
-        foreach (string folder in addon.Folders)
-        {
-            string dir = Path.Combine(addonsDir, folder);
-            if (Directory.Exists(dir))
-            {
-                try { DirectoryHelper.DeleteRecursive(dir); }
-                catch (Exception ex) { _log.Warn($"Could not delete {dir}: {ex.Message}"); }
-            }
-        }
 
-        if (addon.SourceKind == AddonSourceKind.GitHub && TryParseGitHubRepo(addon.SourceRef, out string owner, out string repo))
+        // Off the calling thread - a GitHub addon's cached git clone can hold a sizeable object
+        // database, and this is always called directly from a UI click handler, so deleting it (plus
+        // the installed AddOns folder(s)) synchronously would freeze the window for however long that
+        // takes, same reasoning as AddAsync's own install-copy/temp-cleanup backgrounding above.
+        await Task.Run(() =>
         {
-            string cacheDir = AddonPaths.AddonRepoCacheDir(owner, repo);
-            if (Directory.Exists(cacheDir))
+            foreach (string folder in addon.Folders)
             {
-                try { DirectoryHelper.DeleteRecursive(cacheDir); }
-                catch (Exception ex) { _log.Warn($"Could not delete cached repo clone {cacheDir}: {ex.Message}"); }
+                string dir = Path.Combine(addonsDir, folder);
+                if (Directory.Exists(dir))
+                {
+                    try { DirectoryHelper.DeleteRecursive(dir); }
+                    catch (Exception ex) { _log.Warn($"Could not delete {dir}: {ex.Message}"); }
+                }
             }
-        }
+
+            if (addon.SourceKind == AddonSourceKind.GitHub && TryParseGitHubRepo(addon.SourceRef, out string owner, out string repo))
+            {
+                string cacheDir = AddonPaths.AddonRepoCacheDir(owner, repo);
+                if (Directory.Exists(cacheDir))
+                {
+                    try { DirectoryHelper.DeleteRecursive(cacheDir); }
+                    catch (Exception ex) { _log.Warn($"Could not delete cached repo clone {cacheDir}: {ex.Message}"); }
+                }
+            }
+        });
 
         _addons.Remove(addon);
         Save(wowDir);

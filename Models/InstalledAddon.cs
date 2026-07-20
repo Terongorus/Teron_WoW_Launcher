@@ -30,7 +30,7 @@ public sealed class InstalledAddon
     /// <summary>Canonical source reference (repo URL, or the original archive path/URL). Null for Manual.</summary>
     public string? SourceRef { get; set; }
 
-    /// <summary>The addon's own version, from its .toc "## Version:" line. Null if the .toc has none — never shown.</summary>
+    /// <summary>The addon's own version, from its .toc "## Version:" line. Null if the .toc has none - VersionDisplay shows "v?" in that case rather than hiding the field entirely.</summary>
     public string? Version { get; set; }
 
     /// <summary>
@@ -51,8 +51,23 @@ public sealed class InstalledAddon
     [JsonIgnore]
     public bool HasUpdateAvailable { get; set; }
 
+    /// <summary>Prefixes a single "v" - some addons' own "## Version:" line already starts with one
+    /// (e.g. "v1.0.0"), which used to produce a doubled "vv1.0.0"; that leading v/V is stripped
+    /// first so exactly one is ever shown regardless of what the .toc itself contains.</summary>
     [JsonIgnore]
-    public string VersionDisplay => string.IsNullOrEmpty(Version) ? string.Empty : $"v{Version}";
+    public string VersionDisplay
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(Version))
+            {
+                return "v?";
+            }
+
+            string trimmed = Version.StartsWith('v') || Version.StartsWith('V') ? Version[1..] : Version;
+            return $"v{trimmed}";
+        }
+    }
 
     /// <summary>
     /// Human-facing source name shown in the addon list. GitHub/GitLab/Manual map straight from

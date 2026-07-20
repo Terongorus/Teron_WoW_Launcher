@@ -26,6 +26,7 @@ public sealed record PlayResult(bool Success, int? ProcessId);
 
 /// <summary>
 /// Ties the individual services together into the single, fixed-order "Play" flow:
+///   0.   re-assert the Config.WTF prerequisite keys, if that toggle is enabled,
 ///   1-2. rebuild WoW.exe from the pristine backup with the enabled executable patches
 ///        (Signature Removal, then VanillaTweaks),
 ///   3-4. resolve dlls.txt and launch the game suspended, injecting each DLL, then resume,
@@ -38,6 +39,7 @@ public sealed class LaunchOrchestrator
     private readonly SettingsService _settings;
     private readonly DirectorySettingsService _dirSettings;
     private readonly PatchService _patch = new();
+    private readonly ConfigWtfService _configWtf = new();
     private readonly DllListService _dlls = new();
     private readonly GameInjector _injector = new();
     private readonly AutoLoginService _autoLogin = new();
@@ -78,6 +80,24 @@ public sealed class LaunchOrchestrator
         {
             _log.Error($"WoW.exe not found at {wowExe}. Set the game folder in Settings.");
             return new PlayResult(false, null);
+        }
+
+        // 0. Re-assert the Config.WTF prerequisite keys, if enabled. The client itself can rewrite
+        // gxColorBits/gxDepthBits between sessions (the in-game Color/Depth/Multisample dropdown), so
+        // a one-shot "apply once" model isn't safe here the way it is for realmlist.wtf - this cheap,
+        // idempotent upsert guarantees the required keys hold for THIS session regardless of what the
+        // file looked like when the game last exited, without touching anything else in it (e.g. the
+        // multisample level itself, which shares that same dropdown but isn't one of ours).
+        if (_dirSettings.Current.ConfigWtfRewriteEnabled)
+        {
+            try
+            {
+                _configWtf.ApplyRequiredSettings(wowDir);
+            }
+            catch (Exception ex)
+            {
+                _log.Warn($"Could not re-apply Config.WTF settings: {ex.Message}");
+            }
         }
 
         // 1-2. Executable patches, always rebuilt from the pristine backup so order is guaranteed.

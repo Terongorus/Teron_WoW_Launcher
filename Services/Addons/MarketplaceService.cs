@@ -209,6 +209,14 @@ public sealed class MarketplaceService
         @"<div id=""ftwp-postcontent"">(?<body>.*?)</div>\s*</div>\s*<div id=""sidebar-div"">",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
+    // Fallback for Legacy-WoW's other page template - "tool/generator" addon pages (e.g. ABHelper)
+    // don't use the ftwp-postcontent wrapper at all; their real content sits right after a
+    // "print the content" PHP comment, still followed by the same sidebar-div marker. Verified
+    // against the real fetched ABHelper page, which has zero ftwp-postcontent matches.
+    private static readonly Regex LegacyWowToolPageContentRegex = new(
+        @"<!--\s*print the content\s*-->(?<body>.*?)</div>\s*<div id=""sidebar-div"">",
+        RegexOptions.Singleline | RegexOptions.Compiled);
+
     // Warperia's description tab: <div class="tab-pane ... " id="descriptionTab"><div class="addon-content ...">BODY</div></div><div class="tab-pane ... " id="imagesTab">
     // The next tab-pane's id marks the end, the same "isolate between two real markers" approach as above.
     private static readonly Regex WarperiaDetailContentRegex = new(
@@ -227,8 +235,20 @@ public sealed class MarketplaceService
 
         return await Task.Run(() =>
         {
-            Regex contentRegex = entry.Source == "Warperia" ? WarperiaDetailContentRegex : LegacyWowDetailContentRegex;
-            Match match = contentRegex.Match(html);
+            Match match;
+            if (entry.Source == "Warperia")
+            {
+                match = WarperiaDetailContentRegex.Match(html);
+            }
+            else
+            {
+                match = LegacyWowDetailContentRegex.Match(html);
+                if (!match.Success)
+                {
+                    match = LegacyWowToolPageContentRegex.Match(html);
+                }
+            }
+
             string body = match.Success
                 ? HtmlFragmentToMarkdown(match.Groups["body"].Value)
                 : "*No description available - open the page directly to see more.*";

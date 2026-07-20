@@ -21,6 +21,18 @@ public sealed class DirectorySettingsService
 {
     private const string FileName = ".teronwow-directory-settings.json";
 
+    // A dedicated, one-time GLOBAL marker (lives in AppPaths.DataRoot, not any one WoW directory) -
+    // checked BEFORE ever touching settings.json's content, mirroring AddonLibrary's own
+    // .migrated-marker fix for the identical failure class it hit for real (2026-07-19): relying
+    // solely on StripLegacyFieldsFromGlobalSettings() having successfully removed the "Account" field
+    // meant that if that strip step ever failed (file lock, permissions, antivirus, disk issue), the
+    // field would stay present and EVERY subsequently-added WoW directory would silently re-adopt the
+    // same stale Account/Password/Realmlist/etc. snapshot from whichever directory migrated first -
+    // this marker decouples "has this one-time migration already happened" from "did the cleanup
+    // sub-step also succeed", so a strip failure can only ever leave harmless unused leftover keys in
+    // settings.json, never cause repeat cross-directory data adoption.
+    private const string MigratedMarkerFileName = ".teronwow-directory-settings-migrated";
+
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     // Every field that used to live in the single global settings.json before per-directory scoping -
@@ -38,7 +50,7 @@ public sealed class DirectorySettingsService
 
     public DirectorySettings Current { get; private set; } = new();
 
-    public static string FilePath(string wowDir) => Path.Combine(wowDir, FileName);
+    public static string FilePath(string wowDir) => PerDirectoryDataFolder.ResolvePath(wowDir, FileName);
 
     public DirectorySettings Load(string wowDir)
     {
@@ -89,7 +101,8 @@ public sealed class DirectorySettingsService
     // that type has already dropped these fields.
     private void MigrateLegacyGlobalFieldsIfPresent(string targetPath)
     {
-        if (File.Exists(targetPath) || !File.Exists(AppPaths.SettingsFilePath))
+        string markerPath = Path.Combine(AppPaths.DataRoot, MigratedMarkerFileName);
+        if (File.Exists(targetPath) || File.Exists(markerPath) || !File.Exists(AppPaths.SettingsFilePath))
         {
             return;
         }
@@ -100,7 +113,7 @@ public sealed class DirectorySettingsService
             JsonElement root = doc.RootElement;
             if (!root.TryGetProperty("Account", out _))
             {
-                return; // already-migrated or never had these fields to begin with
+                return; // never had these fields to begin with - nothing to migrate, no marker needed
             }
 
             var migrated = new DirectorySettings
@@ -150,10 +163,14 @@ public sealed class DirectorySettingsService
             AtomicFile.WriteAllText(targetPath, JsonSerializer.Serialize(migrated, JsonOptions));
             _log.Info($"Migrated the old shared settings.json's per-installation fields into {targetPath}.");
 
-            // Only the first directory this ever runs for should adopt the old global data - without
-            // this, the check above (root.TryGetProperty("Account", ...)) keeps succeeding forever,
-            // since nothing else ever rewrites settings.json to drop these now-unused keys, and every
-            // later directory silently re-adopts this same snapshot instead of starting empty.
+            // Written immediately after the migration write succeeds, BEFORE the cleanup step below -
+            // this is what actually prevents a second/third/Nth directory from re-adopting the same
+            // stale snapshot, not the strip step (which only tidies up settings.json and can fail
+            // independently without that meaning migration itself needs to run again).
+            AtomicFile.WriteAllText(markerPath, DateTime.UtcNow.ToString("o"));
+
+            // Best-effort cleanup only - if this fails, settings.json just keeps some now-unused keys
+            // sitting in it harmlessly; the marker above is what actually stops repeat migration.
             StripLegacyFieldsFromGlobalSettings();
         }
         catch (Exception ex)

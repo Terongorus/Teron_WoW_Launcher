@@ -39,7 +39,7 @@ public sealed class DllListService
     private readonly Logger _log = Logger.Instance;
 
     public string DllsFilePath(string wowDir) => Path.Combine(wowDir, DllsFileName);
-    public string CacheFilePath(string wowDir) => Path.Combine(wowDir, CacheFileName);
+    public string CacheFilePath(string wowDir) => PerDirectoryDataFolder.ResolvePath(wowDir, CacheFileName);
 
     /// <summary>Resolves a dlls.txt entry (relative or absolute) to an absolute path, without checking existence.</summary>
     public string ResolvePath(string wowDir, string name) => NormalizePath(wowDir, name);

@@ -23,7 +23,7 @@ public static class AddonPaths
     /// installation tracks its own addons independently; a single shared file meant switching
     /// between two install directories never actually changed which addons showed up as tracked.
     /// </summary>
-    public static string AddonsFilePath(string wowDir) => Path.Combine(wowDir, ".teronwow-addons.json");
+    public static string AddonsFilePath(string wowDir) => PerDirectoryDataFolder.ResolvePath(wowDir, ".teronwow-addons.json");
 
     /// <summary>The pre-fix shared location every WoW directory used to read/write - see AddonLibrary's migration logic.</summary>
     public static string LegacyGlobalAddonsFilePath => Path.Combine(AppPaths.DataRoot, "addons.json");

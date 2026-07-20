@@ -1,0 +1,83 @@
+<Window x:Class="TeronWoWLauncher.Dialogs.MpqPatchMetadataDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="Patch Info" Height="660" Width="540"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="#1B1B1F">
+
+    <shell:WindowChrome.WindowChrome>
+        <!-- Same close-only locked chrome as AddAddonDialog: no icon/title text/minimize/maximize,
+             CaptionHeight="0" so no part of the window is draggable, ResizeMode="NoResize" plus
+             ResizeBorderThickness="0" so it can't be resized either. -->
+        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="0" GlassFrameThickness="0" CornerRadius="6"
+                             UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <!-- The app-wide TextBlock/TextBox/Button styles (App.xaml) cover this dialog too — no local overrides here. -->
+
+    <Border Margin="16" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6">
+        <DockPanel>
+            <Button DockPanel.Dock="Top" Style="{StaticResource WindowCloseButtonStyle}" Content="&#xE8BB;"
+                    Width="48" Height="36" HorizontalAlignment="Right" Click="OnCancel" ToolTip="Close"/>
+
+            <Grid Margin="20,0,20,20">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock x:Name="HeadingText" Grid.Row="0" Style="{StaticResource Heading2Text}" Text="Patch info" Margin="0,0,0,6"/>
+
+                <!-- Read-only - Website comes only from the patch's own bundled Patch.toc and is never
+                     user-editable (see MpqPatchMetadata's doc comment for why); label+link collapsed
+                     entirely when not found. Shown as a real clickable link. -->
+                <TextBlock x:Name="WebsiteLabel" Grid.Row="1" Style="{StaticResource BodyText}" Text="Website"
+                           Margin="0,0,0,4" Visibility="Collapsed"/>
+                <TextBlock x:Name="ExtractedInfoText" Grid.Row="2" Style="{StaticResource CaptionText}"
+                           TextWrapping="Wrap" Margin="0,0,0,14" Visibility="Collapsed"/>
+
+                <TextBlock Grid.Row="3" Style="{StaticResource BodyText}" Text="Title" Margin="0,0,0,4"/>
+                <TextBlock x:Name="TitleNoticeText" Grid.Row="4" Style="{StaticResource MicroText}"
+                           TextWrapping="Wrap" Margin="0,0,0,6"/>
+                <TextBox x:Name="TitleBox" Grid.Row="5" Margin="0,0,0,12"/>
+
+                <TextBlock Grid.Row="6" Style="{StaticResource BodyText}" Text="Version" Margin="0,0,0,4"/>
+                <TextBlock x:Name="VersionNoticeText" Grid.Row="7" Style="{StaticResource MicroText}"
+                           TextWrapping="Wrap" Margin="0,0,0,6" Visibility="Collapsed"/>
+                <TextBox x:Name="VersionBox" Grid.Row="8" Margin="0,0,0,12"/>
+
+                <TextBlock Grid.Row="9" Style="{StaticResource BodyText}" Text="Author" Margin="0,0,0,4"/>
+                <TextBlock x:Name="AuthorNoticeText" Grid.Row="10" Style="{StaticResource MicroText}"
+                           TextWrapping="Wrap" Margin="0,0,0,6" Visibility="Collapsed"/>
+                <TextBox x:Name="AuthorBox" Grid.Row="11" Margin="0,0,0,12"/>
+
+                <TextBlock Grid.Row="12" Style="{StaticResource BodyText}" Text="Description" Margin="0,0,0,4"/>
+                <TextBlock x:Name="DescriptionNoticeText" Grid.Row="13" Style="{StaticResource MicroText}"
+                           TextWrapping="Wrap" Margin="0,0,0,6" Visibility="Collapsed"/>
+                <TextBox x:Name="DescriptionBox" Grid.Row="14" AcceptsReturn="True" TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
+
+                <StackPanel Grid.Row="15" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                    <Button Content="Cancel" Click="OnCancel" Margin="0,0,8,0"/>
+                    <Button x:Name="SaveButton" Content="Save" Click="OnSave"
+                            Background="#3B7D3B" BorderThickness="0"/>
+                </StackPanel>
+            </Grid>
+        </DockPanel>
+    </Border>
+</Window>

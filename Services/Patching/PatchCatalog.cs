@@ -33,6 +33,7 @@ public static class PatchCatalog
                 "Disables the client's file-signature checks so custom MPQ patches and edited DBC " +
                 "files load without warnings.",
             Category = PatchCategory.SignatureRemoval,
+            MandatoryForMpq = true,
             BuildSteps = _ => new List<PatchStep>
             {
                 Off(0x2F113A, 0x5F), Off(0x2F113B, 0x5E), Off(0x2F1158, 0x01),
@@ -49,7 +50,8 @@ public static class PatchCatalog
         // Large Address Aware: PE Characteristics @0x126 |= 0x20 (0x010F -> 0x012F on 5875).
         list.Add(Toggle("laa", "Large Address Aware",
             "Lets the client use more than 2 GB of memory (helps with large custom content).",
-            new List<PatchStep> { Raw(0x126, new byte[] { 0x2F, 0x01 }, new byte[] { 0x0F, 0x01 }) }));
+            new List<PatchStep> { Raw(0x126, new byte[] { 0x2F, 0x01 }, new byte[] { 0x0F, 0x01 }) },
+            mandatoryForMpq: true));
 
         // Sound in background: @0x3A4869 0x14 -> 0x27.
         list.Add(Toggle("sound-in-background", "Sound in background",
@@ -135,13 +137,15 @@ public static class PatchCatalog
         return list;
     }
 
-    private static PatchDefinition Toggle(string id, string name, string description, List<PatchStep> steps)
+    private static PatchDefinition Toggle(
+        string id, string name, string description, List<PatchStep> steps, bool mandatoryForMpq = false)
         => new()
         {
             Id = id,
             Name = name,
             Description = description,
             Category = PatchCategory.VanillaTweak,
+            MandatoryForMpq = mandatoryForMpq,
             BuildSteps = _ => steps,
         };
 

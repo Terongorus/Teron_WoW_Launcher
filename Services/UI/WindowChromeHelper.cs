@@ -8,10 +8,18 @@ namespace TeronWoWLauncher.Services.UI;
 
 /// <summary>
 /// Shared fix for any window using its own custom WindowChrome + title row (MainWindow,
-/// MarkdownPreviewDialog): without this, Windows sizes a maximized chromeless window to the full
-/// monitor bounds instead of the work area, so it overhangs the taskbar/screen edge by the invisible
-/// resize-border thickness and gets clipped there — the whole UI reads as though it's been pushed in
-/// a few pixels from every edge compared to the same window un-maximized.
+/// MarkdownPreviewDialog, AddonDetailsDialog): without this, a maximized chromeless WindowChrome
+/// window overhangs the taskbar/screen edge and gets clipped there — the whole UI reads as though
+/// it's been pushed in a few pixels from every edge compared to the same window un-maximized.
+///
+/// The WM_GETMINMAXINFO handling alone (sizing ptMaxSize/ptMaxPosition to the monitor's work area)
+/// is NOT sufficient and was the original, incomplete version of this fix: traced via an isolated
+/// repro harness, WindowChrome's own internal WM_NCCALCSIZE handling independently re-pads the
+/// maximized window's proposed rect back out by its resize-border amount regardless of maximize
+/// state, silently undoing the GETMINMAXINFO fix afterward (WM_WINDOWPOSCHANGING correctly lands on
+/// the work area; WM_NCCALCSIZE then re-expands rgrc[0] past it; WM_WINDOWPOSCHANGED finalizes on
+/// that expanded rect). Clamping rgrc[0] back to the work area in WM_NCCALCSIZE - gated on IsZoomed
+/// so normal-state resizing is untouched - is what actually sticks.
 /// </summary>
 public static class WindowChromeHelper
 {
@@ -27,10 +35,16 @@ public static class WindowChromeHelper
     private static IntPtr WindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         const int WM_GETMINMAXINFO = 0x0024;
+        const int WM_NCCALCSIZE = 0x0083;
+
         if (msg == WM_GETMINMAXINFO)
         {
             ApplyMaximizedWorkAreaBounds(hwnd, lParam);
             handled = true;
+        }
+        else if (msg == WM_NCCALCSIZE && wParam != IntPtr.Zero && WindowMetrics.IsZoomed(hwnd))
+        {
+            ClampNcCalcSizeToWorkArea(hwnd, lParam);
         }
 
         return IntPtr.Zero;
@@ -61,5 +75,24 @@ public static class WindowChromeHelper
         mmi.ptMaxTrackSize.X = mmi.ptMaxSize.X;
         mmi.ptMaxTrackSize.Y = mmi.ptMaxSize.Y;
         Marshal.StructureToPtr(mmi, lParam, true);
+    }
+
+    private static void ClampNcCalcSizeToWorkArea(IntPtr hwnd, IntPtr lParam)
+    {
+        IntPtr monitor = WindowMetrics.MonitorFromWindow(hwnd, WindowMetrics.MONITOR_DEFAULTTONEAREST);
+        if (monitor == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var monitorInfo = new WindowMetrics.MONITORINFO { cbSize = Marshal.SizeOf<WindowMetrics.MONITORINFO>() };
+        if (!WindowMetrics.GetMonitorInfo(monitor, ref monitorInfo))
+        {
+            return;
+        }
+
+        var ncParams = Marshal.PtrToStructure<WindowMetrics.NCCALCSIZE_PARAMS>(lParam);
+        ncParams.rgrc0 = monitorInfo.rcWork;
+        Marshal.StructureToPtr(ncParams, lParam, true);
     }
 }

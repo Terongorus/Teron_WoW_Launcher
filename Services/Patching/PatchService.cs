@@ -181,18 +181,35 @@ public sealed class PatchService
         }
     }
 
-    /// <summary>Best-effort detection of which non-parameterized patches are present in WoW.exe.</summary>
-    public HashSet<string> DetectApplied(string wowDir, IReadOnlyList<PatchDefinition> catalog)
-        => DetectApplied(File.ReadAllBytes(WowExePath(wowDir)), catalog);
-
+    /// <summary>
+    /// Best-effort detection of which patches are present in WoW.exe, or (for parameterized patches)
+    /// whose region simply isn't in a trustworthy pristine state. Used to decide whether an existing
+    /// WoW.exe can be trusted as the pristine source for a new backup — always against an
+    /// already-in-memory image, never re-reading the file itself.
+    /// </summary>
     private static HashSet<string> DetectApplied(byte[] image, IReadOnlyList<PatchDefinition> catalog)
     {
         var applied = new HashSet<string>();
         foreach (PatchDefinition patch in catalog)
         {
-            // Parameterized patches vary by value, so the settings file is their source of truth.
             if (patch.Parameter is not null)
             {
+                // A parameterized patch's chosen value varies (the settings file is its source of
+                // truth for that), but its AcceptBefore fingerprint is the client's fixed pristine
+                // default regardless of value - BuildSteps' argument here doesn't affect it. If the
+                // region doesn't match that fingerprint, the exe isn't pristine there, even though we
+                // can't say what value is currently baked in - flagging it is what lets
+                // EnsurePristineBackup refuse instead of silently adopting a non-pristine exe as the
+                // backup baseline for this patch (closes a gap the toggle-only check below can't see).
+                IReadOnlyList<PatchStep> defSteps = patch.BuildSteps(patch.Parameter.Default);
+                bool anyRegionNonPristine = defSteps.Any(s =>
+                    s.AcceptBefore is { Length: > 0 } fingerprints &&
+                    !fingerprints.Any(fp => RegionEquals(image, checked((int)s.Offset), fp)));
+                if (anyRegionNonPristine)
+                {
+                    applied.Add(patch.Id);
+                }
+
                 continue;
             }
 

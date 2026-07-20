@@ -29,6 +29,10 @@
     <svc:ScrollableToVisibilityConverter x:Key="ScrollableToVis"/>
     <svc:TabScrollBarVisibilityConverter x:Key="TabScrollBarVis"/>
     <svc:LogLevelToBrushConverter x:Key="LogLevelToBrush"/>
+    <svc:ProgressBarFillWidthConverter x:Key="ProgressBarFillWidth"/>
+    <svc:RoundedRectClipConverter x:Key="RoundedRectClip"/>
+    <svc:ProgressBarFillClipConverter x:Key="ProgressBarFillClip"/>
+    <svc:ProgressBarSparkMarginConverter x:Key="ProgressBarSparkMargin"/>
 
     <!-- The app-wide TextBlock/CheckBox/TextBox/PasswordBox/ListBox/Button/window-control-button
          styles (App.xaml) cover this window too — no local overrides here, except MarketplaceListStyle
@@ -73,6 +77,129 @@
                 <ItemsPresenter/>
               </ScrollViewer>
             </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- MainProgressBar's own style: rounded track + a diagonal-stripe-animated indicator instead of
+         a static flat-colored rectangle, so it visibly reads as "actively working" rather than just a
+         colored bar that happens to change width. Width-based indicator sizing
+         (ProgressBarFillWidthConverter), not a RenderTransform ScaleTransform, so the tiled stripe
+         pattern stays a fixed visual size regardless of fill percentage - scaling the whole indicator
+         would squash the stripes thinner as the fill percentage dropped. When IsIndeterminate, the
+         converter returns the full track width so the whole bar animates continuously (used by the
+         patch-apply/backup-verify flows, which have no known duration or byte count to report). The
+         stripe brush is a translucent white overlay, not a hardcoded color, so it reads correctly
+         over whichever state color MainProgressBar.Foreground is set to (Play green/Install blue/
+         Update gold) without needing per-color tuning. -->
+    <Style x:Key="AnimatedProgressBarStyle" TargetType="{x:Type ProgressBar}">
+      <Setter Property="Background" Value="#101014"/>
+      <Setter Property="BorderBrush" Value="#3A3A42"/>
+      <Setter Property="BorderThickness" Value="2"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type ProgressBar}">
+            <Grid>
+              <Border Background="{TemplateBinding Background}"
+                      BorderBrush="{TemplateBinding BorderBrush}"
+                      BorderThickness="{TemplateBinding BorderThickness}"
+                      CornerRadius="6"/>
+              <!-- ClipToBounds clips to the plain rectangular bounding box, NOT to CornerRadius -
+                   Border doesn't auto-clip its Child to its own rounded corners, which let the
+                   square-cornered indicator/stripe visibly poke past the track's rounded corners.
+                   An explicit rounded-rect Clip geometry (RoundedRectClipConverter), sized to this
+                   Border's own runtime ActualWidth/Height, is the actual fix. -->
+              <Border x:Name="ClipContainer" Margin="{TemplateBinding BorderThickness}">
+                <Border.Clip>
+                  <MultiBinding Converter="{StaticResource RoundedRectClip}" ConverterParameter="5">
+                    <Binding Path="ActualWidth" RelativeSource="{RelativeSource Self}"/>
+                    <Binding Path="ActualHeight" RelativeSource="{RelativeSource Self}"/>
+                  </MultiBinding>
+                </Border.Clip>
+                <Grid>
+                  <!-- Solid color fill - a plain color has no pattern to desync, so resizing this on
+                       every progress tick (unlike the stripe overlay below) is harmless. -->
+                  <Border x:Name="PART_Indicator" HorizontalAlignment="Left"
+                          Background="{TemplateBinding Foreground}">
+                    <Border.Width>
+                      <MultiBinding Converter="{StaticResource ProgressBarFillWidth}">
+                        <Binding Path="Value" RelativeSource="{RelativeSource TemplatedParent}"/>
+                        <Binding Path="Minimum" RelativeSource="{RelativeSource TemplatedParent}"/>
+                        <Binding Path="Maximum" RelativeSource="{RelativeSource TemplatedParent}"/>
+                        <Binding Path="IsIndeterminate" RelativeSource="{RelativeSource TemplatedParent}"/>
+                        <Binding Path="ActualWidth" RelativeSource="{RelativeSource TemplatedParent}"/>
+                      </MultiBinding>
+                    </Border.Width>
+                  </Border>
+
+                  <!-- Stripe overlay: a CONSTANT full-track-size Rectangle (never resized as progress
+                       updates), with only its Clip growing to reveal more of it - the tile pattern's
+                       own coordinate space is stable, so its rasterization never has to re-anchor.
+                       Sizing the Rectangle itself to the fill width directly (the original approach)
+                       visibly seamed mid-bar instead of just at the trailing edge, confirmed via a
+                       screenshot (2026-07-19) - a tiled DrawingBrush's rasterization apparently doesn't
+                       stay consistent across frequent per-tick resizes while its scroll transform is
+                       also animating. Clipping instead of resizing sidesteps that entirely. -->
+                  <!-- Fill is built entirely in code-behind (MainWindow.xaml.cs,
+                       OnMainProgressBarLoaded) as one continuous non-tiled geometry with many
+                       explicit repeated stripes, not a DrawingBrush TileMode="Tile" - a real,
+                       reproducing mid-bar seam persisted (confirmed via screenshot, 2026-07-19) even
+                       after removing the per-tick resize that was the first suspected cause,
+                       pointing at WPF's own tiled-brush rasterization as the actual source rather
+                       than anything about the resize/clip approach. One continuous hand-built
+                       geometry has no tile boundary for that to happen across. -->
+                  <Rectangle x:Name="PART_StripeOverlay">
+                    <Rectangle.Clip>
+                      <MultiBinding Converter="{StaticResource ProgressBarFillClip}">
+                        <Binding Path="Value" RelativeSource="{RelativeSource TemplatedParent}"/>
+                        <Binding Path="Minimum" RelativeSource="{RelativeSource TemplatedParent}"/>
+                        <Binding Path="Maximum" RelativeSource="{RelativeSource TemplatedParent}"/>
+                        <Binding Path="IsIndeterminate" RelativeSource="{RelativeSource TemplatedParent}"/>
+                        <Binding Path="ActualWidth" RelativeSource="{RelativeSource Self}"/>
+                        <Binding Path="ActualHeight" RelativeSource="{RelativeSource Self}"/>
+                      </MultiBinding>
+                    </Rectangle.Clip>
+                  </Rectangle>
+
+                  <!-- "Spark"/leading-edge glow: a soft bright vertical band centered on the fill's
+                       current edge, transparent-bright-transparent horizontally. IsHitTestVisible=False
+                       since it's purely decorative, sitting on top of everything else in this Grid. -->
+                  <Rectangle Width="11" HorizontalAlignment="Left" IsHitTestVisible="False">
+                    <Rectangle.Margin>
+                      <MultiBinding Converter="{StaticResource ProgressBarSparkMargin}" ConverterParameter="11">
+                        <Binding Path="Value" RelativeSource="{RelativeSource TemplatedParent}"/>
+                        <Binding Path="Minimum" RelativeSource="{RelativeSource TemplatedParent}"/>
+                        <Binding Path="Maximum" RelativeSource="{RelativeSource TemplatedParent}"/>
+                        <Binding Path="IsIndeterminate" RelativeSource="{RelativeSource TemplatedParent}"/>
+                        <Binding Path="ActualWidth" RelativeSource="{RelativeSource TemplatedParent}"/>
+                      </MultiBinding>
+                    </Rectangle.Margin>
+                    <Rectangle.Fill>
+                      <!-- Between the original spread (14px, 0/0.5/1) and the too-tight version
+                           (8px, 0.35/0.45-0.55/0.65) - a middle-ground width and falloff. -->
+                      <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                        <GradientStop Color="#00FFFFFF" Offset="0"/>
+                        <GradientStop Color="#00FFFFFF" Offset="0.25"/>
+                        <GradientStop Color="#CCFFFFFF" Offset="0.4"/>
+                        <GradientStop Color="#CCFFFFFF" Offset="0.6"/>
+                        <GradientStop Color="#00FFFFFF" Offset="0.75"/>
+                        <GradientStop Color="#00FFFFFF" Offset="1"/>
+                      </LinearGradientBrush>
+                    </Rectangle.Fill>
+                  </Rectangle>
+                </Grid>
+              </Border>
+            </Grid>
+            <!-- The stripe-scroll animation is started from code-behind (MainWindow.xaml.cs,
+                 StartProgressBarStripeAnimation), not a declarative ControlTemplate.Triggers
+                 EventTrigger/Storyboard - Storyboard.TargetName resolution against a name inside this
+                 template proved unreliable here (threw InvalidOperationException and crashed the app
+                 on load, then again with the same error after renaming the target, 2026-07-19),
+                 including on a Loaded event that re-broadcasts during window resize. Calling
+                 BeginAnimation directly on the actual TranslateTransform object (found once via
+                 Template.FindName after the template is applied) sidesteps namescope resolution
+                 entirely and isn't subject to the same failure. -->
           </ControlTemplate>
         </Setter.Value>
       </Setter>
@@ -134,14 +261,64 @@
       </Setter>
     </Style>
 
-    <!-- DllList/DetectedDllList row: name plus whatever version-resource metadata was found for it,
-         all on one line — Summary already omits any field that wasn't present on the file itself. -->
+    <!-- DllList/DetectedDllList row: same shape as AddonList's own row (info button on the left,
+         name+Summary filling the middle, action buttons on the right, Tag={Binding} so each button's
+         click handler knows which DllInfo it's acting on) — Summary already omits any field that
+         wasn't present on the file/manual sidecar. The rightmost button doubles as track/untrack:
+         its icon/color/tooltip flip based on IsTracked (see the Style below) rather than being two
+         separate buttons, since a row is either tracked or not, never both. Ignore only ever applies
+         to an untracked row (a tracked DLL can't be hidden), so it's collapsed entirely otherwise. -->
     <DataTemplate x:Key="DllRowTemplate">
-      <StackPanel Orientation="Horizontal" Margin="0,4">
-        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center"/>
-        <TextBlock Text="{Binding Summary}" Style="{StaticResource CaptionText}"
-                   Margin="10,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-      </StackPanel>
+      <Grid Margin="0,4">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+
+        <Button Grid.Column="0" Style="{StaticResource GhostIconButtonStyle}" Content="&#xE946;"
+                Tag="{Binding}" Click="OnDllInfoClick" ToolTip="View / edit this DLL's info"
+                Margin="0,0,8,0"/>
+
+        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+          <TextBlock Text="{Binding Summary}" Style="{StaticResource CaptionText}"
+                     Margin="10,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+        </StackPanel>
+
+        <Button Grid.Column="2" Content="&#xED1A;"
+                Tag="{Binding}" Click="OnIgnoreDllClick" ToolTip="Ignore (won't be suggested again)"
+                Margin="8,0,0,0" Width="28" Height="28">
+          <Button.Style>
+            <Style TargetType="{x:Type Button}" BasedOn="{StaticResource IconButtonStyle}">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsTracked}" Value="True">
+                  <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Button.Style>
+        </Button>
+
+        <Button Grid.Column="3" Tag="{Binding}" Click="OnToggleDllTrackedClick"
+                Margin="8,0,0,0" Width="28" Height="28">
+          <Button.Style>
+            <Style TargetType="{x:Type Button}" BasedOn="{StaticResource IconButtonStyle}">
+              <Setter Property="Content" Value="&#xE710;"/>
+              <Setter Property="Background" Value="{StaticResource AddActionBrush}"/>
+              <Setter Property="ToolTip" Value="Start tracking (inject on launch)"/>
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsTracked}" Value="True">
+                  <Setter Property="Content" Value="&#xE74D;"/>
+                  <Setter Property="Background" Value="{StaticResource RemoveActionBrush}"/>
+                  <Setter Property="ToolTip" Value="Stop tracking (won't be injected)"/>
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Button.Style>
+        </Button>
+      </Grid>
     </DataTemplate>
 
     <!-- LogList row: timestamp always muted regardless of severity; the "[LEVEL] message" portion
@@ -222,29 +399,10 @@
         </Grid.ColumnDefinitions>
 
         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
-          <!-- Global toast (issue #13) - single-slot, replaces the old plain StatusText TextBlock,
-               for genuine one-off outcomes (Ready./Settings saved./Install failed./etc.). Sized to
-               its own content (HorizontalAlignment="Left" + MaxWidth) rather than stretching the
-               full footer width. Continuous progress narration (download %, "Extracting...") does
-               NOT go through this - see ProgressStatusText below - since re-showing it on every
-               progress tick made a just-closed toast pop back open moments later.
-               BorderBrush/Foreground are set per-message from code (severity color); starts
-               Collapsed/Opacity=0 and fades in via ShowGlobalToast, fades out + collapses via
-               DismissGlobalToast. -->
-          <Border x:Name="GlobalToastBorder" Background="#1B1B1F" BorderThickness="1" CornerRadius="6"
-                  Padding="8,4" Margin="0,0,0,4" HorizontalAlignment="Left" MaxWidth="420"
-                  Visibility="Collapsed" Opacity="0">
-            <DockPanel>
-              <Button DockPanel.Dock="Right" Content="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="10"
-                      Foreground="#9A9AA2" Background="Transparent" BorderThickness="0" Padding="0" Cursor="Arrow"
-                      Width="16" Height="16" Margin="8,0,0,0" Click="OnCloseGlobalToast" ToolTip="Dismiss"/>
-              <TextBlock x:Name="GlobalToastText" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
-            </DockPanel>
-          </Border>
-
           <!-- Progress bar + its own attached status line/control buttons - a continuously-updating
-               readout tied to the bar itself, not a dismissible notification (see ShowGlobalToast's
-               comment above for why this was split out). Two separate buttons, not one toggle:
+               readout tied to the bar itself, not a dismissible toast (re-showing one on every
+               progress tick would make a just-closed toast pop back open moments later). Two
+               separate buttons, not one toggle:
                PauseResumeButton temporarily stops the client download (Install/Update/Repair -
                resumable, since GameInstallService already supports resuming a partial download via
                HTTP Range requests against a fixed temp filename) and CancelDownloadButton
@@ -255,19 +413,26 @@
                MainProgressBar's - patch rebuild/backup verification are near-instant and have
                nothing meaningful to pause or cancel, so both stay hidden there. -->
           <Grid>
-            <ProgressBar x:Name="MainProgressBar" Height="20" Minimum="0" Maximum="100"
-                         Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" Visibility="Collapsed"/>
-            <DockPanel Margin="8,0">
+            <ProgressBar x:Name="MainProgressBar" Height="34" Minimum="0" Maximum="100"
+                         Style="{StaticResource AnimatedProgressBarStyle}" Visibility="Collapsed"/>
+            <DockPanel Margin="10,0">
               <Button DockPanel.Dock="Right" x:Name="CancelDownloadButton" Content="&#xE711;"
-                      FontFamily="Segoe Fluent Icons" FontSize="10" Foreground="White" Background="Transparent"
-                      BorderThickness="0" Padding="0" Cursor="Hand" Width="16" Height="16" Margin="6,0,0,0"
+                      FontFamily="Segoe Fluent Icons" FontSize="14" Foreground="White" Background="Transparent"
+                      BorderThickness="0" Padding="0" Cursor="Hand" Width="24" Height="24" Margin="8,0,0,0"
                       Click="OnCancelDownloadClick" ToolTip="Cancel" Visibility="Collapsed"/>
               <Button DockPanel.Dock="Right" x:Name="PauseResumeButton" Content="&#xE769;"
-                      FontFamily="Segoe Fluent Icons" FontSize="10" Foreground="White" Background="Transparent"
-                      BorderThickness="0" Padding="0" Cursor="Hand" Width="16" Height="16"
+                      FontFamily="Segoe Fluent Icons" FontSize="14" Foreground="White" Background="Transparent"
+                      BorderThickness="0" Padding="0" Cursor="Hand" Width="24" Height="24"
                       Click="OnPauseResumeClick" ToolTip="Pause" Visibility="Collapsed"/>
               <TextBlock x:Name="ProgressStatusText" Style="{StaticResource CaptionText}" Foreground="White"
-                         FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                         FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0">
+                <!-- ShadowDepth=0 makes this an even outline/halo in every direction rather than a
+                     directional drop-shadow - improves legibility against the animated striped
+                     indicator behind it, which shifts through green/blue/gold depending on state. -->
+                <TextBlock.Effect>
+                  <DropShadowEffect Color="Black" ShadowDepth="0" BlurRadius="3" Opacity="0.9"/>
+                </TextBlock.Effect>
+              </TextBlock>
             </DockPanel>
           </Grid>
         </StackPanel>
@@ -288,8 +453,7 @@
       <Image x:Name="BodyBackgroundImage" Stretch="UniformToFill" Opacity="0.12" IsHitTestVisible="False"/>
 
       <TabControl x:Name="MainTabs" Style="{StaticResource HeaderlessTabControl}"
-                      Background="Transparent" BorderThickness="0" Padding="0" SelectedIndex="0"
-                      SelectionChanged="OnMainTabsSelectionChanged">
+                      Background="Transparent" BorderThickness="0" Padding="0" SelectedIndex="0">
 
       <!-- 0: Home (Login & Game) -->
       <TabItem d:IsHidden="True">
@@ -303,7 +467,11 @@
           <!-- Left: How to use. Fills the column's real height (no outer page scroll here), split
                evenly between the two previews. Each preview clips rather than scrolling internally —
                click anywhere on one to open it full-size in a dedicated dialog. -->
-          <Grid Grid.Column="0" Margin="0,0,20,0">
+          <Grid Grid.Column="0" Margin="50,40,50,40">
+            <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="Auto"/>
@@ -314,15 +482,20 @@
 
             <TextBlock Grid.Row="0" Style="{StaticResource Heading2Text}" Text="News" Margin="0,0,0,16"/>
 
-            <TextBlock Grid.Row="1" Style="{StaticResource Heading3Text}" Text="Readme" Margin="0,0,0,6"/>
-            <Border Grid.Row="2" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6"
-                    Padding="12" Cursor="Hand" Tag="Readme" MouseLeftButtonUp="OnExpandMarkdown">
-              <markdig:MarkdownViewer x:Name="ReadmeViewer" Style="{StaticResource CompactMarkdownViewer}"
-                                       IsHitTestVisible="False"/>
-            </Border>
+            <!-- Heading and hint share the same top/bottom margin and VerticalAlignment="Bottom", so
+                 their baselines line up off the row's actual height rather than a hand-tuned offset
+                 that would drift if either style's font size ever changes. -->
+            <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource Heading3Text}" Text="Readme" Margin="0,0,0,6" VerticalAlignment="Bottom"/>
+                <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource MicroText}" TextWrapping="Wrap" Text="Click to expand" TextAlignment="Right" Margin="0,0,5,6" VerticalAlignment="Bottom"/>
+                <Border Grid.Row="2" Grid.ColumnSpan="2" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6"
+                  Padding="12" Cursor="Hand" Tag="Readme" MouseLeftButtonUp="OnExpandMarkdown">
+                  <markdig:MarkdownViewer x:Name="ReadmeViewer" Style="{StaticResource CompactMarkdownViewer}"
+                                IsHitTestVisible="False"/>
+                </Border>
 
-            <TextBlock Grid.Row="3" Style="{StaticResource Heading3Text}" Text="Changelog" Margin="0,20,0,6"/>
-            <Border Grid.Row="4" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6"
+                <TextBlock Grid.Row="3" Grid.ColumnSpan="2" Style="{StaticResource Heading3Text}" Text="Changelog" Margin="0,20,0,6" VerticalAlignment="Bottom"/>
+                <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource MicroText}" TextWrapping="Wrap" Text="Click to expand" TextAlignment="Right" Margin="0,20,5,6" VerticalAlignment="Bottom"/>
+                <Border Grid.Row="4" Grid.ColumnSpan="2" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6"
                     Padding="12" Cursor="Hand" Tag="Changelog" MouseLeftButtonUp="OnExpandMarkdown">
               <markdig:MarkdownViewer x:Name="ChangelogViewer" Style="{StaticResource CompactMarkdownViewer}"
                                        IsHitTestVisible="False"/>
@@ -337,10 +510,10 @@
                fixed the earlier equal-thirds clipping bug); the gaps between/around them are explicit
                proportional (*) spacer rows instead of fixed pixel margins, so extra vertical space on
                a tall window is actually spread across all three sections rather than collapsing into
-               one gap around whichever section happens to sit in a lone leftover * row. The gap before
-               Login is weighted 2* (vs 1* elsewhere) since it's the section most worth visually
-               separating from the compact Client Path/Realm pair above it. -->
-          <Grid Grid.Column="2" Margin="20,0,0,0">
+               one gap around whichever section happens to sit in a lone leftover * row. All spacer
+               rows share equal 1* weight, so every gap (top, between sections, bottom) stays the
+               same size as the window grows/shrinks. -->
+          <Grid x:Name="HomeLoginColumnGrid" Grid.Column="2" Margin="50,0,0,0">
             <Grid.RowDefinitions>
               <RowDefinition Height="*"/>
               <RowDefinition Height="Auto"/>
@@ -360,7 +533,7 @@
                   <TextBlock x:Name="RealmlistLabel" Style="{StaticResource CaptionText}"
                              Text="(not set)" TextDecorations="Underline" VerticalAlignment="Center"/>
                 </StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                    <StackPanel Orientation="Horizontal" Margin="0,6,0,4">
                       <TextBlock Text="Status:" Style="{StaticResource CaptionText}"
              VerticalAlignment="Center" Margin="0,0,6,0"/>
                       <!-- Realm status dot: periodically TCP-probed against the realmlist host's auth
@@ -379,7 +552,12 @@
                    one already keeps its own addons/tweaks/credentials (DirectorySettings), so
                    switching here is just a shortcut for retyping/re-browsing the same folder in
                    Settings. -->
-              <ComboBox x:Name="DirectorySwitchBox" Width="340" Height="26.62"
+              <!-- Sizes to its own content (the selected directory path) but capped by
+                   MaxWidth to the column's actual rendered width, bound to the outer
+                   HomeLoginColumnGrid rather than this StackPanel - the StackPanel itself is
+                   Left-aligned/content-sized too, so binding to it would be circular. -->
+              <ComboBox x:Name="DirectorySwitchBox" Height="36.62"
+                        MaxWidth="{Binding ActualWidth, ElementName=HomeLoginColumnGrid}"
                         ToolTip="Switch to a previously managed WoW directory"
                         SelectionChanged="OnManagedDirectorySelected"/>
             </StackPanel>
@@ -405,22 +583,57 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto">
           <Border Style="{StaticResource PageCardStyle}">
             <StackPanel>
-              <TextBlock Style="{StaticResource Heading3Text}"
-                                     Text="Executable tweaks (rebuilt from a pristine backup, in fixed order)"
-                                     Margin="0,0,0,4"/>
+              <TextBlock Style="{StaticResource Heading2Text}"
+                                     Text="Game Client Tweaks"
+                                     Margin="0,0,0,4"
+                                     TextAlignment="Center"/>
               <TextBlock Style="{StaticResource MicroText}"
-                                     Text="1. Signature Removal → 2. VanillaTweaks. Toggling or adjusting any tweak rebuilds WoW.exe from the untouched backup, as soon as you change it."
-                                     TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                     Text="Toggling or adjusting any tweak rebuilds WoW.exe from an untouched backup."
+                                     TextWrapping="Wrap"
+                                     Margin="0,0,0,4"
+                                     TextAlignment="Center"/>
+                  <TextBlock Style="{StaticResource MicroText}"
+                      Text="Tweaks are applied in a predefined fixed order to ensure the game client does not break or get corrupted."
+                      TextWrapping="Wrap"
+                      Margin="0,0,0,20"
+                      TextAlignment="Center"/>
+
+                  <!-- ============ Mandatory for custom MPQ patches ============ -->
+              <TextBlock Style="{StaticResource Heading3Text}"
+                                     Text="Mandatory tweaks" Margin="0,0,0,4"/>
+              <DockPanel Margin="0,0,0,8" LastChildFill="True">
+                <TextBlock DockPanel.Dock="Left" Text="&#xE7BA;" FontFamily="Segoe Fluent Icons"
+                           FontSize="12" Foreground="#F0C878" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <TextBlock Style="{StaticResource MicroText}" TextWrapping="Wrap"
+                                     Text="If you plan to use custom MPQ patches, enable everything in this section — it's what keeps a heavier patch set from crashing or refusing to launch."/>
+              </DockPanel>
 
               <!-- Shown only while Signature Removal is off AND one or more custom MPQ patches are
                    still active — that combination isn't a degraded experience, it's an unplayable one:
                    WoW's own file-signature check (left intact without this patch) rejects the unsigned
-                   MPQ content and refuses to launch, reporting a corrupted Data folder. -->
+                   MPQ content and refuses to launch, reporting a corrupted Data folder. Signature
+                   Removal is the only one of the three mandatory items that's a hard launch-blocker,
+                   which is why it's the only one with a dynamic warning banner - LAA and Config.WTF are
+                   "enable to be safe" rather than "enable or it won't start at all". -->
               <Border x:Name="SignatureMpqWarningBanner" Visibility="Collapsed"
                       Background="#3A2A10" BorderBrush="#E0A030" BorderThickness="1" CornerRadius="4"
                       Padding="10,8" Margin="0,0,0,10">
                 <TextBlock x:Name="SignatureMpqWarningText" Foreground="#F0C878" FontSize="12" TextWrapping="Wrap"/>
               </Border>
+
+              <StackPanel x:Name="MandatoryPatchesPanel"/>
+
+              <!-- Distinct from the byte-patch list above - this edits specific WTF\Config.WTF
+                   keys (a text file), not WoW.exe. -->
+              <CheckBox x:Name="ConfigWtfCheck" Content="Force required Config.WTF settings for HD/visual patches"/>
+              <TextBlock Foreground="#8A8A92" FontSize="12" TextWrapping="Wrap" Margin="24,2,0,4"
+                                     Text="Some HD/visual MPQ patches (e.g. Project Reforged Kronos) require specific Config.WTF settings to render. This only edits those specific keys — your other video settings are left exactly as they are."/>
+
+              <!-- ============ Optional tweaks ============ -->
+              <TextBlock Style="{StaticResource Heading3Text}"
+                                     Text="Optional tweaks" Margin="0,20,0,4"/>
+              <TextBlock Style="{StaticResource MicroText}" TextWrapping="Wrap" Margin="0,0,0,8"
+                                     Text="Quality-of-life and visual tweaks. Not required for custom MPQ patches to work, with or without them."/>
 
               <StackPanel x:Name="PatchesPanel"/>
             </StackPanel>
@@ -430,64 +643,96 @@
 
       <!-- 2: DLLs -->
       <TabItem d:IsHidden="True">
-        <Grid Margin="16">
+        <!-- Column 1 is what actually keeps the header and list cards aligned: it's reserved for the
+             standalone scrollbar in Row 1, and since a Grid's columns are shared by every row in that
+             same Grid, Row 0's own (empty) Column 1 cell is automatically forced to that exact same
+             width — no guessed pixel constant, so it can't drift no matter how wide the real scrollbar
+             renders. Both cards live in Column 0 only, so they always share one identical width. Same
+             layout shape as MPQ Patches/Addons — see their own comments for the full rationale. -->
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
-            <ColumnDefinition Width="*"/>
           </Grid.ColumnDefinitions>
 
-          <!-- Left: tracked DLLs (dlls.txt, load order) -->
-          <Grid Grid.Column="0" Margin="0,0,16,0">
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
+          <!-- Pinned top of the card: title, microtext, toolbar + search. Never scrolls. -->
+          <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource PageCardTopStyle}">
+            <StackPanel>
+                  <TextBlock Style="{StaticResource Heading2Text}" Text="DLL Manager" TextAlignment="Center" Margin="0,0,0,20"/>
 
-            <StackPanel Grid.Row="0" Margin="0,0,0,8">
-              <TextBlock Style="{StaticResource Heading3Text}" Text="DLLs injected on launch (dlls.txt, load order top → bottom)"/>
-              <TextBlock Style="{StaticResource MicroText}" Text="Only files that exist are injected."/>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                  <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnAddDll"
+                          Background="{StaticResource AddActionBrush}" ToolTip="Add a DLL to inject"/>
+                  <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshDlls" Margin="8,0,0,0"
+                          ToolTip="Rescan the game folder for DLLs"/>
+                  <Button Style="{StaticResource IconButtonStyle}" Content="&#xE70E;" Click="OnMoveDllUp" Margin="8,0,0,0"
+                          ToolTip="Move up in load order (tracked DLLs only)"/>
+                  <Button Style="{StaticResource IconButtonStyle}" Content="&#xE70D;" Click="OnMoveDllDown" Margin="8,0,0,0"
+                          ToolTip="Move down in load order (tracked DLLs only)"/>
+                </StackPanel>
+
+                <Grid Grid.Column="1" Width="260" VerticalAlignment="Center">
+                  <TextBox x:Name="DllSearchBox" Padding="5,4,24,4" TextChanged="OnDllSearchTextChanged"
+                           PreviewKeyDown="OnDllSearchKeyDown" GotFocus="OnDllSearchFocusChanged"
+                           LostFocus="OnDllSearchFocusChanged" ToolTip="Search DLLs by name"/>
+                  <TextBlock x:Name="DllSearchPlaceholder" Style="{StaticResource MicroText}"
+                             Text="Search DLLs" IsHitTestVisible="False" VerticalAlignment="Center" Margin="5,0,0,0"/>
+                  <Button Content="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="10" Foreground="#E5484D"
+                          Background="Transparent" BorderThickness="0" Padding="0" Cursor="Arrow"
+                          Width="18" Height="18" HorizontalAlignment="Right" VerticalAlignment="Center"
+                          Margin="0,0,3,0" Click="OnClearDllSearch" ToolTip="Clear search">
+                    <Button.Style>
+                      <Style TargetType="{x:Type Button}" BasedOn="{StaticResource {x:Type Button}}">
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding ElementName=DllSearchBox, Path=Text.Length}" Value="0">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Button.Style>
+                  </Button>
+                </Grid>
+              </Grid>
             </StackPanel>
-            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-              <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnAddDll"
-                      Background="{StaticResource AddActionBrush}" ToolTip="Add a DLL to inject"/>
-              <Button Style="{StaticResource IconButtonStyle}" Content="&#xE74D;" Click="OnRemoveDll" Margin="8,0,0,0"
-                      Background="{StaticResource RemoveActionBrush}" ToolTip="Remove the selected DLL"/>
-              <Button Style="{StaticResource IconButtonStyle}" Content="&#xE70E;" Click="OnMoveDllUp" Margin="8,0,0,0"
-                      ToolTip="Move up in load order"/>
-              <Button Style="{StaticResource IconButtonStyle}" Content="&#xE70D;" Click="OnMoveDllDown" Margin="8,0,0,0"
-                      ToolTip="Move down in load order"/>
-            </StackPanel>
-            <ListBox Grid.Row="2" x:Name="DllList" ItemTemplate="{StaticResource DllRowTemplate}"/>
-          </Grid>
+          </Border>
 
-          <!-- Divider between the tracked and detected DLL lists. -->
-          <Border Grid.Column="1" Width="1" Background="#3A3A42" Margin="0,4"/>
+          <!-- Bottom of the card: both lists, one shared scroll region — see MpqScrollViewer's own
+               comment for the hidden-inner/standalone-outer scrollbar rationale. -->
+          <ScrollViewer x:Name="DllScrollViewer" Grid.Row="1" Grid.Column="0" VerticalScrollBarVisibility="Hidden">
+            <Border Style="{StaticResource PageCardBottomStyle}">
+              <StackPanel>
+                <TextBlock Style="{StaticResource Heading3Text}" Text="Tracked DLLs"/>
+                    <TextBlock Style="{StaticResource MicroText}" TextWrapping="Wrap" TextAlignment="Left" Margin="0,0,0,8"
+                         Text="Tracked DLLs are injected on launch, in the order listed. Load order: top → bottom."/>
+                    <ListBox x:Name="DllList" HorizontalContentAlignment="Stretch" Margin="0,4,0,0"
+                         ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         PreviewMouseWheel="OnDllListPreviewMouseWheel" ItemTemplate="{StaticResource DllRowTemplate}"/>
 
-          <!-- Right: DLLs detected in the game folder, not yet tracked -->
-          <Grid Grid.Column="2" Margin="16,0,0,0">
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
-
-            <StackPanel Grid.Row="0" Margin="0,0,0,8">
-              <TextBlock Style="{StaticResource Heading3Text}" Text="Detected in game folder (not tracked)"/>
-              <TextBlock Style="{StaticResource MicroText}" Text="DLLs found directly in the game folder that aren't in dlls.txt yet."/>
-            </StackPanel>
-            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-
-              <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnAddDetectedDlls" Margin="0,0,0,0"
-                      Background="{StaticResource AddActionBrush}" ToolTip="Start tracking the selected DLL(s)"/>
-              <Button Style="{StaticResource IconButtonStyle}" Content="&#xED1A;" Click="OnIgnoreDetectedDlls" Margin="8,0,0,0"
-                      ToolTip="Ignore the selected DLL(s) (won't be suggested again)"/>
-              <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshDetectedDlls"
-                      ToolTip="Rescan the game folder for new DLLs" Margin="8,0,0,0"/>
-            </StackPanel>
-            <ListBox Grid.Row="2" x:Name="DetectedDllList" SelectionMode="Extended" ItemTemplate="{StaticResource DllRowTemplate}"/>
-          </Grid>
+                <TextBlock Style="{StaticResource Heading3Text}" Text="Detected in game folder (not tracked)" Margin="0,20,0,0"/>
+                    <TextBlock Style="{StaticResource MicroText}" Text="All DLLs found sitting in the game folder show up below as detected, but are not tracked unless explicitly toggled." TextWrapping="Wrap" TextAlignment="Left" Margin="0,0,0,8"/>
+                    <ListBox x:Name="DetectedDllList" HorizontalContentAlignment="Stretch" Margin="0,4,0,0"
+                         ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         PreviewMouseWheel="OnDllListPreviewMouseWheel" ItemTemplate="{StaticResource DllRowTemplate}"/>
+              </StackPanel>
+            </Border>
+          </ScrollViewer>
+          <ScrollBar Grid.Row="1" Grid.Column="1" Orientation="Vertical" Margin="0,0,0,24"
+                     Value="{Binding ElementName=DllScrollViewer, Path=VerticalOffset, Mode=OneWay}"
+                     Maximum="{Binding ElementName=DllScrollViewer, Path=ScrollableHeight}"
+                     ViewportSize="{Binding ElementName=DllScrollViewer, Path=ViewportHeight}"
+                     LargeChange="{Binding ElementName=DllScrollViewer, Path=ViewportHeight}"
+                     Visibility="{Binding ElementName=DllScrollViewer, Path=ScrollableHeight, Converter={StaticResource ScrollableToVis}}"
+                     Scroll="OnDllScrollBarScroll"/>
         </Grid>
       </TabItem>
 
@@ -511,19 +756,52 @@
           <!-- Pinned top of the card: title, microtext, buttons. Never scrolls. -->
           <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource PageCardTopStyle}">
             <StackPanel>
-              <TextBlock Style="{StaticResource Heading3Text}" Text="Custom MPQ patches in Data\ (patch-A.mpq … patch-Z.mpq)"/>
-              <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,8"
-                         Text="Uncheck to disable (renames to _patch-X.mpq). Base Blizzard patches are not shown."/>
-              <StackPanel Orientation="Horizontal">
-                <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnAddMpq"
-                        Background="{StaticResource AddActionBrush}" ToolTip="Add a custom MPQ patch"/>
-                <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshMpq" Margin="8,0,0,0"
-                        ToolTip="Rescan Data\ for custom MPQ patches"/>
-                <Button Style="{StaticResource IconButtonStyle}" Content="&#xE73A;" Click="OnSelectAllMpq" Margin="8,0,0,0"
-                        ToolTip="Enable all patches"/>
-                <Button Style="{StaticResource IconButtonStyle}" Content="&#xE711;" Click="OnDeselectAllMpq" Margin="8,0,0,0"
-                        ToolTip="Disable all patches"/>
-              </StackPanel>
+              <TextBlock Style="{StaticResource Heading2Text}" Text="Custom MPQ Patches" TextAlignment="Center" Margin="0,0,0,20"/>
+                  <TextBlock Style="{StaticResource Heading3Text}" Text="Tracked MPQ patches"/>
+                  <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,8"
+                         Text="The MPQ patches are stored in .\Data\(patch-A.mpq … patch-Z.mpq). Uncheck to disable (renames to _patch-X.mpq).
+                             Base Blizzard patches are not shown!"
+                         TextWrapping="Wrap"
+                             />
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                  <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnAddMpq"
+                          Background="{StaticResource AddActionBrush}" ToolTip="Add a custom MPQ patch"/>
+                  <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshMpq" Margin="8,0,0,0"
+                          ToolTip="Rescan Data\ for custom MPQ patches"/>
+                  <Button Style="{StaticResource IconButtonStyle}" Content="&#xE73A;" Click="OnSelectAllMpq" Margin="8,0,0,0"
+                          ToolTip="Enable all patches"/>
+                  <Button Style="{StaticResource IconButtonStyle}" Content="&#xE711;" Click="OnDeselectAllMpq" Margin="8,0,0,0"
+                          ToolTip="Disable all patches"/>
+                </StackPanel>
+
+                <Grid Grid.Column="1" Width="260" VerticalAlignment="Center">
+                  <TextBox x:Name="MpqSearchBox" Padding="5,4,24,4" TextChanged="OnMpqSearchTextChanged"
+                           PreviewKeyDown="OnMpqSearchKeyDown" GotFocus="OnMpqSearchFocusChanged"
+                           LostFocus="OnMpqSearchFocusChanged" ToolTip="Search patches by name"/>
+                  <TextBlock x:Name="MpqSearchPlaceholder" Style="{StaticResource MicroText}"
+                             Text="Search Patches" IsHitTestVisible="False" VerticalAlignment="Center" Margin="5,0,0,0"/>
+                  <Button Content="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="10" Foreground="#E5484D"
+                          Background="Transparent" BorderThickness="0" Padding="0" Cursor="Arrow"
+                          Width="18" Height="18" HorizontalAlignment="Right" VerticalAlignment="Center"
+                          Margin="0,0,3,0" Click="OnClearMpqSearch" ToolTip="Clear search">
+                    <Button.Style>
+                      <Style TargetType="{x:Type Button}" BasedOn="{StaticResource {x:Type Button}}">
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding ElementName=MpqSearchBox, Path=Text.Length}" Value="0">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Button.Style>
+                  </Button>
+                </Grid>
+              </Grid>
 
               <!-- Mirrors SignatureMpqWarningBanner on the Tweaks tab — shown whenever Signature
                    Removal is off while a patch below is still active, so the warning reaches the user
@@ -580,14 +858,12 @@
                header row matches the selected sub-tab. Never scrolls. -->
           <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource PageCardTopStyle}">
             <StackPanel>
-              <TextBlock Style="{StaticResource Heading3Text}" Text="Addons (installed into Interface\AddOns)"/>
-              <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,8"
-                         Text="Add by GitHub/GitLab repo URL, a Legacy-WoW or Warperia addon page URL, a direct archive URL, or a local .zip/.rar/.7z file."/>
+                  <TextBlock Style="{StaticResource Heading2Text}" Text="Addons Manager" TextAlignment="Center"/>
 
-              <!-- Installed/Browse sub-tab toggle - same RadioButton+underline look as the top-level
+                  <!-- Installed/Browse sub-tab toggle - same RadioButton+underline look as the top-level
                    nav (NavButtonStyle), scoped to its own GroupName so it doesn't interact with the
                    real page navigation, and sized down to read as a sub-toggle, not a second nav bar. -->
-              <StackPanel Orientation="Horizontal" Margin="0,0,0,10" HorizontalAlignment="Center">
+              <StackPanel Orientation="Horizontal" Margin="0,10,0,10" HorizontalAlignment="Center">
                 <RadioButton x:Name="AddonsInstalledToggle" GroupName="AddonsSubTab" IsChecked="True"
                              Style="{StaticResource NavButtonStyle}" FontSize="15" Content="Installed"
                              Margin="0" Checked="OnAddonsSubTabChanged"/>
@@ -603,8 +879,28 @@
                   <ColumnDefinition Width="*"/>
                   <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Orientation="Horizontal">
-                    <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnOpenAddAddonDialog"
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="*"/>
+                      <RowDefinition Height="*"/>
+                      <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Style="{StaticResource MicroText}"
+                        Margin="0,0,0,4"
+                        Text="Add by GitHub/GitLab repo URL, a Legacy-WoW or Warperia addon page URL, a direct archive URL, or a local .zip/.rar/.7z file.
+                               Addons are installed into .\Interface\AddOns\(AddonFolder)."
+                        Grid.Row="0"
+                        Grid.ColumnSpan="2"
+                        TextAlignment="Center"
+                    />
+                    <TextBlock Style="{StaticResource MicroText}"
+                        Margin="0,0,0,20"
+                        Text="Addons are installed into .\Interface\AddOns\(AddonFolder)."
+                        Grid.Row="1"
+                        Grid.ColumnSpan="2"
+                        TextAlignment="Center"
+                    />
+                    <StackPanel Grid.Column="0" Grid.Row="3" Orientation="Horizontal">
+                      <Button Style="{StaticResource IconButtonStyle}" Content="&#xE710;" Click="OnOpenAddAddonDialog"
                         Background="{StaticResource AddActionBrush}" ToolTip="Add an addon"/>
                     <Button x:Name="UpdateAllAddonsButton" Content="&#xE896;"
                         Click="OnUpdateAllAddonsClick" Margin="8,0,0,0" IsEnabled="False"
@@ -626,7 +922,7 @@
                   <Button Style="{StaticResource IconButtonStyle}" Content="&#xE72C;" Click="OnRefreshAddons" Margin="8,0,0,0"
         ToolTip="Refresh: reload, adopt local addons, and check for updates"/>
                 </StackPanel>
-                <Grid Grid.Column="1" Width="260" VerticalAlignment="Center">
+                <Grid Grid.Column="1" Grid.Row="3" Width="260" VerticalAlignment="Center">
                   <TextBox x:Name="AddonSearchBox" Padding="5,4,24,4" TextChanged="OnAddonSearchTextChanged"
                            PreviewKeyDown="OnAddonSearchKeyDown" GotFocus="OnAddonSearchFocusChanged"
                            LostFocus="OnAddonSearchFocusChanged" ToolTip="Search addons by name"/>
@@ -652,7 +948,7 @@
               <!-- Browse sub-tab header: Provider/Category/Sort + search (same look as the Installed
                    search box) + Refresh, all icon-driven to match the rest of the launcher. -->
               <Grid x:Name="BrowseHeaderRow"
-                    Visibility="{Binding IsChecked, ElementName=AddonsBrowseToggle, Converter={StaticResource BoolToVis}}">
+                    Visibility="{Binding IsChecked, ElementName=AddonsBrowseToggle, Converter={StaticResource BoolToVis}}" Margin="0,5,0,0">
                 <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="Auto"/>
                       <ColumnDefinition Width="Auto"/>
@@ -861,9 +1157,27 @@
       <!-- 5: Settings -->
       <TabItem d:IsHidden="True">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-          <Border Style="{StaticResource PageCardStyle}">
-            <StackPanel>
-              <TextBlock Style="{StaticResource Heading3Text}" Text="Installation directory"/>
+              <Border Style="{StaticResource PageCardStyle}">
+                <StackPanel>
+                  <TextBlock Style="{StaticResource Heading2Text}" Text="Settings" TextAlignment="Center" Margin="0,0,0,4"/>
+                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,0">
+                    <TextBlock Text="Settings that are global for the whole launcher are marked with:" Style="{StaticResource MicroText}"/>
+                    <TextBlock Text="&#xE774;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                               Foreground="{StaticResource InstallActionBrush}" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                    <TextBlock Text="." Style="{StaticResource MicroText}"/>
+                  </StackPanel>
+                  <TextBlock Style="{StaticResource MicroText}"
+                      Text="Settings not marked as global apply only to the currently selected client directory."
+                      TextAlignment="Center"
+                      Margin="0,0,0,20"
+                      TextWrapping="Wrap"
+                  />
+                  <DockPanel LastChildFill="True">
+                    <TextBlock DockPanel.Dock="Left" Text="&#xE774;" FontFamily="Segoe Fluent Icons"
+                               FontSize="14" Foreground="{StaticResource InstallActionBrush}"
+                               VerticalAlignment="Center" Margin="0,0,6,0" ToolTip="Global setting"/>
+                    <TextBlock Style="{StaticResource Heading3Text}" Text="Installation directory"/>
+                  </DockPanel>
               <TextBlock Style="{StaticResource MicroText}" Text="The folder containing WoW.exe. If you moved your install, browse to the new location."
                                      Margin="0,0,0,4" TextWrapping="Wrap"/>
               <DockPanel Margin="0,4,0,6">
@@ -887,7 +1201,12 @@
               <ComboBox x:Name="RealmlistBox" Margin="0,0,0,20" IsEditable="True" IsTextSearchEnabled="False"
                         SelectionChanged="OnRealmlistHistorySelected"/>
 
-              <TextBlock Style="{StaticResource Heading3Text}" Text="Client download URL"/>
+              <DockPanel LastChildFill="True">
+                <TextBlock DockPanel.Dock="Left" Text="&#xE774;" FontFamily="Segoe Fluent Icons"
+                           FontSize="14" Foreground="{StaticResource InstallActionBrush}"
+                           VerticalAlignment="Center" Margin="0,0,6,0" ToolTip="Global setting"/>
+                <TextBlock Style="{StaticResource Heading3Text}" Text="Client download URL"/>
+              </DockPanel>
               <TextBlock Style="{StaticResource MicroText}" Text="(advanced — override for another server's client zip)" Margin="0,0,0,4"/>
               <TextBox x:Name="ClientUrlBox" Margin="0,0,0,20"/>
 
@@ -901,7 +1220,12 @@
               <TextBlock Style="{StaticResource MicroText}" TextWrapping="Wrap" Margin="0,0,0,20"
                          Text="Deletes the WDB folder before Play starts the game. It's rebuilt automatically from the server, so this is always safe — useful on private servers where stale cached item/quest data can cause wrong names, tooltips, or icons."/>
 
-              <TextBlock Style="{StaticResource Heading3Text}" Text="Launcher window"/>
+              <DockPanel LastChildFill="True">
+                <TextBlock DockPanel.Dock="Left" Text="&#xE774;" FontFamily="Segoe Fluent Icons"
+                           FontSize="14" Foreground="{StaticResource InstallActionBrush}"
+                           VerticalAlignment="Center" Margin="0,0,6,0" ToolTip="Global setting"/>
+                <TextBlock Style="{StaticResource Heading3Text}" Text="Launcher window"/>
+              </DockPanel>
               <CheckBox x:Name="MinimizeOnLaunchCheck" Content="Minimize the launcher when the game starts" Margin="0,4,0,4"/>
               <TextBlock Style="{StaticResource MicroText}" TextWrapping="Wrap" Margin="0,0,0,20"
                          Text="The launcher automatically comes back to the foreground once the game closes, whether or not this is enabled."/>
@@ -940,10 +1264,12 @@
           <!-- Pinned top of the card: title, description, actions. Never scrolls. -->
           <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource WideCardTopStyle}">
             <StackPanel>
-              <TextBlock Style="{StaticResource Heading3Text}" Text="Application Log"/>
-              <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,8"
-                         Text="Live events as the launcher runs. Clear only hides this view — the file under Logs\ on disk is never touched."/>
-              <StackPanel Orientation="Horizontal">
+              <TextBlock Style="{StaticResource Heading2Text}" Text="Application Log" TextAlignment="Center"/>
+              <TextBlock Style="{StaticResource MicroText}" Margin="0,4,0,20"
+                         Text="Logs live events as the launcher runs. The 'Clear' button only clears this view, but retains the file under Logs\ in the application's AppData settings folder"
+                         TextAlignment="Center"
+                         />
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                 <Button Style="{StaticResource IconButtonStyle}" Content="&#xE74D;" Click="OnClearLog"
                         ToolTip="Clear this view (does not delete the log file)"/>
                 <Button Style="{StaticResource IconButtonStyle}" Content="&#xE8C8;" Click="OnCopyLog" Margin="8,0,0,0"
@@ -975,19 +1301,26 @@
         </Grid>
       </TabItem>
       </TabControl>
+
+      <!-- Unified toast stack (issue #13): up to 10 cards, pinned top-right - a child of THIS Body grid
+           specifically (not the outer window Grid) so "top" resolves to just below the header/nav,
+           not the very top of the window behind it. Above every tab's own content regardless of which
+           is active. Every ShowToast call site passes its own fixed source label explicitly (never
+           derived from whichever tab happens to be selected) - a card's title can't end up wrong just
+           because the user switched tabs while an async operation was still in flight, and cards don't
+           need to be cleared on tab switch either. Built directly in code-behind (MainWindow.xaml.cs)
+           rather than an ItemsControl+DataTemplate, matching this codebase's existing convention for
+           repeated small UI (see MpqPanel). -->
+      <StackPanel x:Name="ToastHost" VerticalAlignment="Top" HorizontalAlignment="Right"
+                  Margin="0,16,24,0" IsHitTestVisible="True"/>
     </Grid>
   </DockPanel>
 
     <!-- Fog overlay: shown while any of our own dialogs is open (ShowModal below), so the launcher
          behind a modal reads as "in the back" instead of looking identical to when it's active. Purely
-         visual — WPF's Window.ShowDialog already disables/redirects focus for the owner on its own. -->
-    <!-- Tab toast stack (issue #13): up to 5 cards, floating over whichever tab is active. Built
-         directly in code-behind (MainWindow.xaml.cs's ShowTabToast) rather than an
-         ItemsControl+DataTemplate, matching this codebase's existing convention for repeated small
-         UI (see MpqPanel). -->
-    <StackPanel x:Name="TabToastHost" VerticalAlignment="Bottom" HorizontalAlignment="Center"
-                Margin="0,0,0,16" IsHitTestVisible="True"/>
-
+         visual — WPF's Window.ShowDialog already disables/redirects focus for the owner on its own.
+         Deliberately still a sibling of the whole DockPanel (not nested in the Body grid like
+         ToastHost above) so it fogs the header/title bar too, not just the tab content. -->
     <Border x:Name="ModalOverlay" Background="#A6101014" Visibility="Collapsed" IsHitTestVisible="False"/>
   </Grid>
 </Window>

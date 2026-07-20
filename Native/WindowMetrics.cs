@@ -5,10 +5,10 @@ namespace TeronWoWLauncher.Native;
 
 /// <summary>
 /// P/Invoke declarations used to correctly size a WindowChrome-styled window when maximized (see
-/// MainWindow's WM_GETMINMAXINFO handling): without this, Windows sizes a chromeless maximized
-/// window to the full monitor bounds rather than the work area, so it overhangs the taskbar/screen
-/// edge by the invisible resize-border amount and gets clipped — the "content looks pushed in from
-/// the edge" symptom this fixes.
+/// WindowChromeHelper's WM_NCCALCSIZE handling): System.Windows.Shell.WindowChrome pads a maximized
+/// chromeless window's rect back out by its own resize-border amount regardless of maximize state,
+/// so it overhangs the taskbar/screen edge and gets clipped — the "content looks pushed in from the
+/// edge" symptom this fixes.
 /// </summary>
 internal static class WindowMetrics
 {
@@ -19,6 +19,9 @@ internal static class WindowMetrics
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsZoomed(IntPtr hwnd);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT
@@ -53,5 +56,15 @@ internal static class WindowMetrics
         public RECT rcMonitor;
         public RECT rcWork;
         public uint dwFlags;
+    }
+
+    /// <summary>Only rgrc[0] (the proposed new window rect, in/out) is used here.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct NCCALCSIZE_PARAMS
+    {
+        public RECT rgrc0;
+        public RECT rgrc1;
+        public RECT rgrc2;
+        public IntPtr lppos;
     }
 }

@@ -22,8 +22,8 @@
     <Product>Teron WoW Launcher (TWL)</Product>
     <Company>Teronverse</Company>
     <Authors>Kaloyan Kolev</Authors>
-    <Version>2.0.0-beta.1</Version>
-    <!-- Keep AssemblyInformationalVersion clean ("2.0.0-beta.1", not "2.0.0-beta.1+<gitsha>"). -->
+    <Version>2.0.0-beta.2</Version>
+    <!-- Keep AssemblyInformationalVersion clean ("2.0.0-beta.2", not "2.0.0-beta.2+<gitsha>"). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 
     <!-- Shown in Explorer/taskbar/Alt+Tab (and used as MainWindow's own icon below, since the
@@ -56,6 +56,19 @@
     <!-- Renders README.md/CHANGELOG.md as a WPF FlowDocument on the Home tab. MIT. -->
     <PackageReference Include="Markdig.Wpf" Version="0.5.0.1" />
   </ItemGroup>
+
+  <!--
+    MPQ patch metadata reading (Services/Patching/MpqReader/) is a minimal, in-repo, read-only MPQ
+    parser adapted from the MIT-licensed War3Net.IO.Mpq, NOT a NuGet dependency - that package
+    transitively pulls in DotNetZip 1.16.0, which carries an unpatched high-severity CVE
+    (CVE-2024-48510, path traversal during zip extraction). The vulnerable code was confirmed
+    (via direct inspection of the compiled DLLs) to be unreachable through anything War3Net.IO.Mpq
+    itself calls, but vendoring the minimal read path avoids the dependency - and the CVE - outright,
+    rather than relying on that "unreachable in practice" analysis staying true across future
+    versions. See MpqReader's own doc comments for exactly what's supported (stored + ZLib
+    compression only - MPQ's rarer methods aren't, and archive creation/writing isn't either, none
+    of which this feature needs).
+  -->
 
   <ItemGroup>
     <!-- Embedded as a WPF pack resource so MainWindow's Icon="game.ico" resolves at runtime,

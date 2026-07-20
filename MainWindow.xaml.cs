@@ -43,8 +43,11 @@ public partial class MainWindow : Window
     private readonly DirectorySettingsService _dirSettings = new();
     private readonly LaunchOrchestrator _orchestrator;
     private readonly DllListService _dlls = new();
+    private readonly DllMetadataService _dllMetadata = new();
     private readonly MpqPatchService _mpq = new();
+    private readonly MpqPatchMetadataService _mpqMetadata = new();
     private readonly RealmlistService _realmlist = new();
+    private readonly ConfigWtfService _configWtf = new();
     private readonly RealmStatusChecker _realmStatus = new();
     private readonly GameInstallService _install = new();
     private readonly GameProcessService _processCheck = new();
@@ -71,6 +74,7 @@ public partial class MainWindow : Window
     private bool _applyingPatches;
     private bool _savingSettings;
     private bool _addonBusy;
+    private bool _mpqMetadataBusy;
     private bool _launchOperationBusy;
     private CancellationTokenSource? _downloadCts;
     private bool _downloadSupportsPauseResume;
@@ -89,12 +93,12 @@ public partial class MainWindow : Window
     private string _lastAppliedWowDir = string.Empty;
     private string _lastAppliedRealmlist = string.Empty;
     private string _lastAppliedClientUrl = string.Empty;
+    private bool _lastAppliedConfigWtfEnabled;
 
     private PlayButtonState _playState = PlayButtonState.Play;
     private UpdateCheckResult? _pendingUpdateCheck;
 
     private static readonly Brush MutedBrush = new SolidColorBrush(Color.FromRgb(0x8A, 0x8A, 0x92));
-    private static readonly Brush BodyBrush = new SolidColorBrush(Color.FromRgb(0xC8, 0xC8, 0xD0));
     private const double BodyFontSize = 14;
     private static readonly Brush PlayColor = new SolidColorBrush(Color.FromRgb(0x3B, 0x7D, 0x3B));
     private static readonly Brush InstallColor = new SolidColorBrush(Color.FromRgb(0x2E, 0x6D, 0xA4));
@@ -136,6 +140,7 @@ public partial class MainWindow : Window
         WindowChromeHelper.FixMaximizedBounds(this);
         StateChanged += OnWindowStateChanged;
         Closing += OnWindowClosing;
+        MainProgressBar.Loaded += OnMainProgressBarLoaded;
 
         _settings.Load();
 
@@ -153,6 +158,8 @@ public partial class MainWindow : Window
         }
 
         _dirSettings.Load(_settings.ResolveWowDirectory());
+        _mpqMetadata.Load(_settings.ResolveWowDirectory());
+        _dllMetadata.Load(_settings.ResolveWowDirectory());
         RecordManagedDirectory(_settings.ResolveWowDirectory());
         RestoreWindowPlacement();
         _orchestrator = new LaunchOrchestrator(_settings, _dirSettings);
@@ -191,13 +198,14 @@ public partial class MainWindow : Window
         DelayBox.TextChanged += (_, _) => ScheduleSettingsSave();
         CleanWdbCheck.Checked += (_, _) => ScheduleSettingsSave();
         CleanWdbCheck.Unchecked += (_, _) => ScheduleSettingsSave();
+        ConfigWtfCheck.Checked += (_, _) => ScheduleSettingsSave();
+        ConfigWtfCheck.Unchecked += (_, _) => ScheduleSettingsSave();
         MinimizeOnLaunchCheck.Checked += (_, _) => ScheduleSettingsSave();
         MinimizeOnLaunchCheck.Unchecked += (_, _) => ScheduleSettingsSave();
 
         _loading = true;
         LoadSettingsIntoUi();
-        RefreshDllList();
-        RefreshDetectedDlls();
+        InitDllsTab();
         RefreshIgnoredDllList();
         RefreshMpqList();
         InitAddonsTab();
@@ -206,15 +214,16 @@ public partial class MainWindow : Window
         _lastAppliedWowDir = CurrentWowDir();
         _lastAppliedRealmlist = _dirSettings.Current.Realmlist;
         _lastAppliedClientUrl = CurrentClientUrl();
+        _lastAppliedConfigWtfEnabled = _dirSettings.Current.ConfigWtfRewriteEnabled;
 
         if (fallbackWowDir is not null)
         {
-            ShowGlobalToast($"'{deadWowDir}' no longer exists — switched to '{fallbackWowDir}'.", ToastSeverity.Warning);
+            ShowToast("Launcher", $"'{deadWowDir}' no longer exists — switched to '{fallbackWowDir}'.", ToastSeverity.Warning);
             _log.Warn($"Configured WoW directory '{deadWowDir}' no longer exists; fell back to managed directory '{fallbackWowDir}'.");
         }
         else
         {
-            ShowGlobalToast("Ready.", ToastSeverity.Info);
+            ShowToast("Launcher", "Ready.", ToastSeverity.Info);
         }
 
         _log.Info("Launcher UI initialized.");
@@ -231,6 +240,11 @@ public partial class MainWindow : Window
         // user having to remember to click it. DLL "detected" and MPQ patch scans already happen above
         // (RefreshDetectedDlls/RefreshMpqList), since re-scanning those doesn't need a shown Owner.
         Loaded += (_, _) => _ = RefreshAddonsAsync();
+
+        // One-time-per-patch best-effort metadata extraction for any custom MPQ patch that predates
+        // this feature (or was dropped in while the app was closed) — see MpqPatchMetadataService's
+        // AutoExtractAttempted flag for why this never re-scans an already-attempted patch.
+        Loaded += (_, _) => _ = RunRetroactiveMpqExtractionAsync();
 
         // "What's new" (if the version changed since last run) and the launcher's own update check,
         // in that order - see CheckForLauncherUpdateAsync's own doc comment for why sequential.
@@ -456,12 +470,18 @@ public partial class MainWindow : Window
     private void BuildPatchList()
     {
         PatchesPanel.Children.Clear();
+        MandatoryPatchesPanel.Children.Clear();
         _patchControls.Clear();
 
         IReadOnlyList<PatchDefinition> catalog = PatchCatalog.All;
 
         foreach (PatchDefinition patch in catalog)
         {
+            // Purely a UI grouping concern (see PatchDefinition.MandatoryForMpq) - Signature Removal
+            // and LAA render into the "Mandatory for custom MPQ patches" section, everything else
+            // into "Optional tweaks". Doesn't affect apply order, which is still Category-driven.
+            StackPanel target = patch.MandatoryForMpq ? MandatoryPatchesPanel : PatchesPanel;
+
             // No DefaultEnabled fallback here - a fresh directory with no recorded selection starts
             // with every tweak unchecked, full stop (a new WoW install shouldn't silently inherit
             // whatever a different installation happened to have enabled).
@@ -469,12 +489,12 @@ public partial class MainWindow : Window
 
             var box = new CheckBox { Content = patch.Name, IsChecked = isChecked };
             box.Click += (_, _) => { SchedulePatchApply(); RefreshSignatureMpqWarning(); };
-            PatchesPanel.Children.Add(box);
-            PatchesPanel.Children.Add(new TextBlock
+            target.Children.Add(box);
+            target.Children.Add(new TextBlock
             {
                 Text = patch.Description,
                 Foreground = MutedBrush,
-                FontSize = 11,
+                FontSize = 12,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(24, 2, 0, 4),
             });
@@ -565,7 +585,7 @@ public partial class MainWindow : Window
                         VerticalAlignment = VerticalAlignment.Center,
                     });
                 }
-                PatchesPanel.Children.Add(row);
+                target.Children.Add(row);
             }
 
             _patchControls.Add(new PatchControl { Def = patch, Box = box, Slider = slider });
@@ -653,6 +673,16 @@ public partial class MainWindow : Window
             // and re-showing a toast on every message made a just-closed one reopen moments later.
             await _orchestrator.ApplyPatchesAsync(new Progress<string>(msg => ProgressStatusText.Text = msg));
         }
+        catch (Exception ex)
+        {
+            // This is an async void timer tick - an unhandled exception here can't be caught by any
+            // caller, only crash the whole app via the global DispatcherUnhandledException backstop.
+            // Every method this currently calls already catches its own I/O exceptions internally,
+            // but that's exactly the kind of downstream guarantee a future edit could quietly break,
+            // so this tick guards itself too rather than relying on it forever.
+            _log.Error("Patch apply tick failed unexpectedly.", ex);
+            ShowToast("Tweaks", $"Failed to apply tweaks: {ex.Message}", ToastSeverity.Error);
+        }
         finally
         {
             _applyingPatches = false;
@@ -664,13 +694,94 @@ public partial class MainWindow : Window
 
     // ---------------- DLLs tab ----------------
 
+    /// <summary>Wires ItemsSource/search filtering once, then does the first populate — same split as
+    /// InitAddonsTab. DllList (tracked) and DetectedDllList (untracked) stay two separate ListBoxes/
+    /// collections rather than one merged data source: that's what makes Move Up/Down naturally a
+    /// no-op on an untracked row (DllList.SelectedIndex can only ever be a tracked entry, since
+    /// DetectedDllList is a different control entirely) without needing an extra guard, and keeps
+    /// tracked-load-order vs detected-alphabetical ordering simple - each list just sorts itself the
+    /// way it already did before this was one visual card.</summary>
+    private void InitDllsTab()
+    {
+        DllList.ItemsSource = _dllItems;
+        DetectedDllList.ItemsSource = _detectedDllItems;
+        CollectionViewSource.GetDefaultView(_dllItems).Filter = FilterDllRow;
+        CollectionViewSource.GetDefaultView(_detectedDllItems).Filter = FilterDllRow;
+        RefreshDllList();
+        RefreshDetectedDlls();
+        UpdateDllSearchPlaceholder();
+    }
+
+    private bool FilterDllRow(object item)
+    {
+        string query = DllSearchBox.Text.Trim();
+        if (query.Length == 0)
+        {
+            return true;
+        }
+
+        var dll = (DllInfo)item;
+        return dll.Name.Contains(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void OnDllSearchTextChanged(object sender, TextChangedEventArgs e)
+    {
+        CollectionViewSource.GetDefaultView(_dllItems).Refresh();
+        CollectionViewSource.GetDefaultView(_detectedDllItems).Refresh();
+        UpdateDllSearchPlaceholder();
+    }
+
+    private void OnDllSearchFocusChanged(object sender, RoutedEventArgs e) => UpdateDllSearchPlaceholder();
+
+    // Driven explicitly from TextChanged/GotFocus/LostFocus instead of an XAML trigger bound to
+    // IsFocused - see UpdateAddonSearchPlaceholder's own comment for why (logical vs keyboard focus).
+    private void UpdateDllSearchPlaceholder()
+        => DllSearchPlaceholder.Visibility = DllSearchBox.Text.Length == 0 && !DllSearchBox.IsFocused
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    private void OnDllSearchKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            Keyboard.ClearFocus();
+            FocusManager.SetFocusedElement(FocusManager.GetFocusScope(DllSearchBox), null);
+            UpdateDllSearchPlaceholder();
+            e.Handled = true;
+        }
+    }
+
+    private void OnClearDllSearch(object sender, RoutedEventArgs e)
+    {
+        DllSearchBox.Text = string.Empty;
+        DllSearchBox.Focus();
+    }
+
+    // DllList/DetectedDllList are ListBoxes, which always carry their own internal ScrollViewer even
+    // with scrollbar visibility set to Disabled - that inner ScrollViewer still claims (marks
+    // Handled) any mouse wheel input, so it never reaches DllScrollViewer above it. Intercepting the
+    // wheel here, before the ListBox's own handler runs, and driving DllScrollViewer directly is the
+    // standard workaround (see OnAddonListPreviewMouseWheel's identical fix).
+    private void OnDllListPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        DllScrollViewer.ScrollToVerticalOffset(DllScrollViewer.VerticalOffset - e.Delta);
+        e.Handled = true;
+    }
+
     private void RefreshDllList()
     {
         string wowDir = CurrentWowDir();
+
+        // dlls.txt.cache's path is otherwise only resolved at actual Play time
+        // (LaunchOrchestrator -> DllListService.UpdateCache) - touching it here too means it migrates
+        // into PerDirectoryDataFolder's ".teronwow" subfolder right away, alongside every other
+        // per-directory data file, instead of trickling in only on the user's next launch.
+        _dlls.ReadCache(wowDir);
+
         _dllItems.Clear();
         foreach (string name in _dlls.ReadActiveNames(wowDir))
         {
-            _dllItems.Add(DllMetadataReader.Read(name, _dlls.ResolvePath(wowDir, name)));
+            _dllItems.Add(_dllMetadata.Merge(DllMetadataReader.Read(name, _dlls.ResolvePath(wowDir, name)), isTracked: true));
         }
     }
 
@@ -683,7 +794,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _log.Error("Failed to save dlls.txt.", ex);
-            ShowTabToast("Failed to save the DLL list — see the Log tab.", ToastSeverity.Error);
+            ShowToast("DLLs", $"Failed to save the DLL list: {ex.Message}", ToastSeverity.Error);
         }
     }
 
@@ -710,17 +821,19 @@ public partial class MainWindow : Window
 
         if (!_dllItems.Any(d => string.Equals(d.Name, entry, StringComparison.OrdinalIgnoreCase)))
         {
-            _dllItems.Add(DllMetadataReader.Read(entry, chosen));
+            _dllItems.Add(_dllMetadata.Merge(DllMetadataReader.Read(entry, chosen), isTracked: true));
             SaveDllList();
             RefreshDetectedDlls();
-            ShowTabToast($"Added {Path.GetFileName(entry)}.", ToastSeverity.Success);
+            ShowToast("DLLs", $"Added {Path.GetFileName(entry)}.", ToastSeverity.Success);
         }
         else
         {
-            ShowTabToast($"{Path.GetFileName(entry)} is already tracked.", ToastSeverity.Info);
+            ShowToast("DLLs", $"{Path.GetFileName(entry)} is already tracked.", ToastSeverity.Info);
         }
     }
 
+    /// <summary>No longer wired to any button (the per-row track/untrack toggle covers this now -
+    /// see OnToggleDllTrackedClick) - kept in case a standalone Remove ever comes back.</summary>
     private void OnRemoveDll(object sender, RoutedEventArgs e)
     {
         if (DllList.SelectedItem is DllInfo item)
@@ -728,8 +841,84 @@ public partial class MainWindow : Window
             _dllItems.Remove(item);
             SaveDllList();
             RefreshDetectedDlls();
-            ShowTabToast($"Removed {item.Name}.", ToastSeverity.Success);
+            ShowToast("DLLs", $"Removed {item.Name}.", ToastSeverity.Success);
         }
+    }
+
+    private void OnDllInfoClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not DllInfo item)
+        {
+            return;
+        }
+
+        string wowDir = CurrentWowDir();
+        // Re-read fresh (not the already-merged row item) so the dialog can tell which fields the
+        // file itself defines (locked) apart from whatever's only in the manual sidecar.
+        DllInfo extracted = DllMetadataReader.Read(item.Name, _dlls.ResolvePath(wowDir, item.Name));
+        var dialog = new DllMetadataDialog(extracted, _dllMetadata.Get(item.Name));
+        if (ShowModal(dialog) == true)
+        {
+            _dllMetadata.SaveManualEdit(
+                wowDir, item.Name,
+                dialog.Version, dialog.VersionIsUserEditable,
+                dialog.Author, dialog.AuthorIsUserEditable,
+                dialog.Description, dialog.DescriptionIsUserEditable);
+            // The edited DLL could be in either list depending on its current tracked state.
+            RefreshDllList();
+            RefreshDetectedDlls();
+            ShowToast("DLLs", $"Updated info for {item.Name}.", ToastSeverity.Success);
+        }
+    }
+
+    /// <summary>The single per-row action that replaces both the old standalone Add-selected and
+    /// Remove buttons: tracking a DLL is exactly "add it to dlls.txt", untracking is exactly "remove
+    /// it from dlls.txt" (the file itself is never touched either way).</summary>
+    private void OnToggleDllTrackedClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not DllInfo item)
+        {
+            return;
+        }
+
+        if (item.IsTracked)
+        {
+            _dllItems.Remove(item);
+            SaveDllList();
+            RefreshDetectedDlls();
+            ShowToast("DLLs", $"Stopped tracking {item.Name}.", ToastSeverity.Success);
+        }
+        else
+        {
+            string wowDir = CurrentWowDir();
+            if (!_dllItems.Any(d => string.Equals(d.Name, item.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                _dllItems.Add(_dllMetadata.Merge(DllMetadataReader.Read(item.Name, _dlls.ResolvePath(wowDir, item.Name)), isTracked: true));
+            }
+
+            SaveDllList();
+            RefreshDetectedDlls();
+            ShowToast("DLLs", $"Tracking {item.Name}.", ToastSeverity.Success);
+        }
+    }
+
+    private void OnIgnoreDllClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not DllInfo item)
+        {
+            return;
+        }
+
+        List<string> ignored = _dirSettings.Current.IgnoredDetectedDlls;
+        if (!ignored.Contains(item.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            ignored.Add(item.Name);
+        }
+
+        _dirSettings.Save(CurrentWowDir());
+        RefreshDetectedDlls();
+        RefreshIgnoredDllList();
+        ShowToast("DLLs", $"Ignored {item.Name}.", ToastSeverity.Success);
     }
 
     private void OnMoveDllUp(object sender, RoutedEventArgs e) => MoveDll(-1);
@@ -756,53 +945,17 @@ public partial class MainWindow : Window
         _detectedDllItems.Clear();
         foreach (string name in _dlls.ScanForUntrackedDlls(wowDir, _dirSettings.Current.IgnoredDetectedDlls))
         {
-            _detectedDllItems.Add(DllMetadataReader.Read(name, Path.Combine(wowDir, name)));
+            _detectedDllItems.Add(_dllMetadata.Merge(DllMetadataReader.Read(name, Path.Combine(wowDir, name)), isTracked: false));
         }
     }
 
-    private void OnRefreshDetectedDlls(object sender, RoutedEventArgs e) => RefreshDetectedDlls();
-
-    private void OnAddDetectedDlls(object sender, RoutedEventArgs e)
+    private void OnRefreshDlls(object sender, RoutedEventArgs e)
     {
-        List<DllInfo> selected = DetectedDllList.SelectedItems.Cast<DllInfo>().ToList();
-        if (selected.Count == 0)
-        {
-            return;
-        }
-
-        foreach (DllInfo item in selected)
-        {
-            if (!_dllItems.Any(d => string.Equals(d.Name, item.Name, StringComparison.OrdinalIgnoreCase)))
-            {
-                _dllItems.Add(item);
-            }
-        }
-
-        SaveDllList();
+        RefreshDllList();
         RefreshDetectedDlls();
     }
 
-    private void OnIgnoreDetectedDlls(object sender, RoutedEventArgs e)
-    {
-        List<DllInfo> selected = DetectedDllList.SelectedItems.Cast<DllInfo>().ToList();
-        if (selected.Count == 0)
-        {
-            return;
-        }
-
-        List<string> ignored = _dirSettings.Current.IgnoredDetectedDlls;
-        foreach (DllInfo item in selected)
-        {
-            if (!ignored.Contains(item.Name, StringComparer.OrdinalIgnoreCase))
-            {
-                ignored.Add(item.Name);
-            }
-        }
-
-        _dirSettings.Save(CurrentWowDir());
-        RefreshDetectedDlls();
-        RefreshIgnoredDllList();
-    }
+    private void OnDllScrollBarScroll(object sender, ScrollEventArgs e) => DllScrollViewer.ScrollToVerticalOffset(e.NewValue);
 
     // ---------------- Ignored DLLs (Settings tab) ----------------
 
@@ -831,6 +984,7 @@ public partial class MainWindow : Window
         _dirSettings.Save(CurrentWowDir());
         RefreshIgnoredDllList();
         RefreshDetectedDlls();
+        ShowToast("Settings", selected.Count == 1 ? $"Un-ignored {selected[0]}." : $"Un-ignored {selected.Count} DLLs.", ToastSeverity.Success);
     }
 
     private void OnUnignoreAllDlls(object sender, RoutedEventArgs e)
@@ -840,10 +994,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        int count = _dirSettings.Current.IgnoredDetectedDlls.Count;
         _dirSettings.Current.IgnoredDetectedDlls.Clear();
         _dirSettings.Save(CurrentWowDir());
         RefreshIgnoredDllList();
         RefreshDetectedDlls();
+        ShowToast("Settings", $"Un-ignored {count} DLL(s).", ToastSeverity.Success);
     }
 
     // ---------------- MPQ tab ----------------
@@ -853,6 +1009,11 @@ public partial class MainWindow : Window
         MpqPanel.Children.Clear();
         string wowDir = CurrentWowDir();
         List<MpqPatch> patches = _mpq.Scan(wowDir);
+
+        string query = MpqSearchBox.Text.Trim();
+        List<MpqPatch> visible = query.Length == 0
+            ? patches
+            : patches.Where(p => MatchesMpqSearch(p, query)).ToList();
 
         if (patches.Count == 0)
         {
@@ -864,9 +1025,22 @@ public partial class MainWindow : Window
                 Margin = new Thickness(0, 6, 0, 0),
             });
         }
-
-        foreach (MpqPatch patch in patches)
+        else if (visible.Count == 0)
         {
+            MpqPanel.Children.Add(new TextBlock
+            {
+                Text = "No patches match your search.",
+                Foreground = MutedBrush,
+                FontSize = BodyFontSize,
+                Margin = new Thickness(0, 6, 0, 0),
+            });
+        }
+
+        foreach (MpqPatch patch in visible)
+        {
+            MpqPatchMetadata? meta = _mpqMetadata.Get(patch.Letter);
+            (string title, string? caption) = MpqRowDisplay(patch, meta);
+
             var row = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
 
             var remove = new Button
@@ -880,15 +1054,46 @@ public partial class MainWindow : Window
             };
             remove.Click += (_, _) =>
             {
-                RunMpqOperation(() => _mpq.Remove(wowDir, patch), $"remove patch {patch.Letter}", $"Removed patch {patch.Letter}.");
+                RunMpqOperation(() =>
+                {
+                    _mpq.Remove(wowDir, patch);
+                    _mpqMetadata.Remove(wowDir, patch.Letter);
+                }, $"remove patch {patch.Letter}", $"Removed patch {patch.Letter}.");
                 RefreshMpqList();
             };
             DockPanel.SetDock(remove, Dock.Right);
             row.Children.Add(remove);
 
+            var details = new Button
+            {
+                Style = (Style)FindResource("GhostIconButtonStyle"),
+                Content = "", // Segoe Fluent Icons: Info - same glyph as the Addons list's "view details" button
+                Tag = patch,
+                Width = 28,
+                Height = 28,
+                Margin = new Thickness(0, 0, 8, 0),
+                ToolTip = "View / edit patch info",
+            };
+            details.Click += (_, _) =>
+            {
+                var dialog = new MpqPatchMetadataDialog(patch.FileName, _mpqMetadata.Get(patch.Letter));
+                if (ShowModal(dialog) == true)
+                {
+                    _mpqMetadata.SaveManualEdit(
+                        wowDir, patch.Letter,
+                        dialog.PatchTitle, dialog.TitleIsUserEditable,
+                        dialog.Author, dialog.AuthorIsUserEditable,
+                        dialog.Description, dialog.DescriptionIsUserEditable,
+                        dialog.Version, dialog.VersionIsUserEditable);
+                    RefreshMpqList();
+                }
+            };
+            DockPanel.SetDock(details, Dock.Left);
+            row.Children.Add(details);
+
             var check = new CheckBox
             {
-                Content = $"patch-{patch.Letter}.mpq" + (patch.Enabled ? string.Empty : "  (disabled)"),
+                Content = title,
                 IsChecked = patch.Enabled,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0),
@@ -899,12 +1104,116 @@ public partial class MainWindow : Window
                     $"Patch {patch.Letter} {(check.IsChecked == true ? "enabled" : "disabled")}.");
                 RefreshMpqList();
             };
-            row.Children.Add(check);
+
+            if (caption is null)
+            {
+                row.Children.Add(check);
+            }
+            else
+            {
+                // Inline caption, same "Name  Caption" single-line shape as the Addons/DLLs lists -
+                // the checkbox docks left instead of filling, so the caption can sit right after it
+                // and fill the remaining width.
+                DockPanel.SetDock(check, Dock.Left);
+                row.Children.Add(check);
+                row.Children.Add(new TextBlock
+                {
+                    Text = caption,
+                    Style = (Style)FindResource("CaptionText"),
+                    Foreground = MutedBrush,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Margin = new Thickness(8, 0, 0, 0),
+                });
+            }
 
             MpqPanel.Children.Add(row);
         }
 
         RefreshSignatureMpqWarning();
+    }
+
+    /// <summary>Matches against the same title MpqRowDisplay actually shows (friendly title if set,
+    /// else the raw slot filename) plus the raw slot filename itself always - so searching "patch-a"
+    /// still finds a patch even once it's been given a friendly title that no longer mentions it.</summary>
+    private bool MatchesMpqSearch(MpqPatch patch, string query)
+    {
+        string slotName = $"patch-{patch.Letter}.mpq";
+        string? title = _mpqMetadata.Get(patch.Letter)?.Title;
+        return slotName.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || (!string.IsNullOrWhiteSpace(title) && title.Contains(query, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // MpqPanel is hand-built rows (not an ItemsSource-bound list), so unlike DllList/AddonList's
+    // CollectionViewSource.Filter, filtering here just re-runs RefreshMpqList with the current query -
+    // same search-box UX (placeholder, clear button, Escape-clears-focus) as Addons/DLLs otherwise.
+    private void OnMpqSearchTextChanged(object sender, TextChangedEventArgs e)
+    {
+        RefreshMpqList();
+        UpdateMpqSearchPlaceholder();
+    }
+
+    private void OnMpqSearchFocusChanged(object sender, RoutedEventArgs e) => UpdateMpqSearchPlaceholder();
+
+    private void UpdateMpqSearchPlaceholder()
+        => MpqSearchPlaceholder.Visibility = MpqSearchBox.Text.Length == 0 && !MpqSearchBox.IsFocused
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    private void OnMpqSearchKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            Keyboard.ClearFocus();
+            FocusManager.SetFocusedElement(FocusManager.GetFocusScope(MpqSearchBox), null);
+            UpdateMpqSearchPlaceholder();
+            e.Handled = true;
+        }
+    }
+
+    private void OnClearMpqSearch(object sender, RoutedEventArgs e)
+    {
+        MpqSearchBox.Text = string.Empty;
+        MpqSearchBox.Focus();
+    }
+
+    /// <summary>Merges an MpqPatch's scanned state with its (possibly null) metadata into the row's
+    /// display title and an optional Author/Description caption line (same omit-if-absent "  •  "
+    /// shape as DllInfo.Summary). When a custom title is set, the canonical patch-&lt;letter&gt;.mpq
+    /// slot name is appended in parentheses right after it - a friendly title shouldn't hide which
+    /// physical file/load-order slot it actually is. Falls back to the plain slot name alone when no
+    /// title is set.</summary>
+    private static (string Title, string? Caption) MpqRowDisplay(MpqPatch patch, MpqPatchMetadata? meta)
+    {
+        string slotName = $"patch-{patch.Letter}.mpq";
+        string title = !string.IsNullOrWhiteSpace(meta?.Title) ? $"{meta!.Title} ({slotName})" : slotName;
+        if (!patch.Enabled)
+        {
+            title += "  (disabled)";
+        }
+
+        var parts = new List<string>(4);
+        if (!string.IsNullOrWhiteSpace(meta?.Version))
+        {
+            parts.Add($"v{meta!.Version}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(meta?.Author))
+        {
+            parts.Add(meta!.Author!);
+        }
+
+        if (!string.IsNullOrWhiteSpace(meta?.Description))
+        {
+            parts.Add(meta!.Description!);
+        }
+
+        if (!string.IsNullOrWhiteSpace(meta?.Website))
+        {
+            parts.Add(meta!.Website!);
+        }
+
+        return (title, parts.Count > 0 ? string.Join("  •  ", parts) : null);
     }
 
     private void OnAddMpq(object sender, RoutedEventArgs e)
@@ -919,8 +1228,78 @@ public partial class MainWindow : Window
             return;
         }
 
-        RunMpqOperation(() => _mpq.Add(CurrentWowDir(), dialog.FileName), "add the MPQ patch", "Added the MPQ patch.");
+        string wowDir = CurrentWowDir();
+        MpqPatch? added = RunMpqOperation(() => _mpq.Add(wowDir, dialog.FileName), "add the MPQ patch", "Added the MPQ patch.");
         RefreshMpqList();
+        if (added is not null)
+        {
+            _ = ExtractMpqMetadataAsync(wowDir, added);
+        }
+    }
+
+    /// <summary>Backgrounds a best-effort metadata extraction attempt for one newly-added patch, then
+    /// applies whatever was found (silently - no toast either way, see MpqPatchMetadataExtractor's own
+    /// doc comment) and refreshes the row in place, but only if the user hasn't since switched to a
+    /// different WoW directory.</summary>
+    private async Task ExtractMpqMetadataAsync(string wowDir, MpqPatch patch)
+    {
+        string path = Path.Combine(_mpq.DataDirectory(wowDir), patch.FileName);
+        MpqExtractedInfo? info = await Task.Run(() => MpqPatchMetadataExtractor.TryExtract(path));
+        _mpqMetadata.ApplyExtracted(wowDir, patch.Letter, path, info?.Title, info?.Author, info?.Description, info?.Version, info?.Website);
+
+        if (string.Equals(CurrentWowDir(), wowDir, StringComparison.OrdinalIgnoreCase))
+        {
+            RefreshMpqList();
+        }
+    }
+
+    /// <summary>One-time-per-patch background sweep for any custom MPQ patch that's never had an
+    /// extraction attempt recorded (pre-existing patches from before this feature shipped, or ones
+    /// added while the app was closed) - guarded by _mpqMetadataBusy the same way RefreshAddonsAsync's
+    /// startup rescan guards against overlapping runs. AutoExtractAttempted means a given patch is only
+    /// ever opened once, not on every tab visit/refresh.</summary>
+    private async Task RunRetroactiveMpqExtractionAsync()
+    {
+        if (_mpqMetadataBusy)
+        {
+            return;
+        }
+
+        _mpqMetadataBusy = true;
+        try
+        {
+            string wowDir = CurrentWowDir();
+            string dataDir = _mpq.DataDirectory(wowDir);
+            List<MpqPatch> pending = _mpq.Scan(wowDir)
+                .Where(p => _mpqMetadata.NeedsExtraction(p.Letter, Path.Combine(dataDir, p.FileName)))
+                .ToList();
+            if (pending.Count == 0)
+            {
+                return;
+            }
+
+            foreach (MpqPatch patch in pending)
+            {
+                string path = Path.Combine(dataDir, patch.FileName);
+                MpqExtractedInfo? info = await Task.Run(() => MpqPatchMetadataExtractor.TryExtract(path));
+                _mpqMetadata.ApplyExtracted(wowDir, patch.Letter, path, info?.Title, info?.Author, info?.Description, info?.Version, info?.Website);
+            }
+
+            if (string.Equals(CurrentWowDir(), wowDir, StringComparison.OrdinalIgnoreCase))
+            {
+                RefreshMpqList();
+            }
+        }
+        catch (Exception ex)
+        {
+            // Defense in depth only - TryExtract already swallows its own per-file failures. No
+            // user-facing toast: this is a silent background maintenance pass, not user-initiated.
+            _log.Warn($"Retroactive MPQ metadata extraction pass failed: {ex.Message}");
+        }
+        finally
+        {
+            _mpqMetadataBusy = false;
+        }
     }
 
     private void OnRefreshMpq(object sender, RoutedEventArgs e) => RefreshMpqList();
@@ -942,7 +1321,7 @@ public partial class MainWindow : Window
         foreach (MpqPatch patch in _mpq.Scan(wowDir))
         {
             // No per-patch successMessage here deliberately - one toast per patch in this loop would
-            // flood the 5-slot tab-toast stack; a single summary toast after the loop is enough.
+            // flood the toast stack; a single summary toast after the loop is enough.
             if (RunMpqOperation(() => _mpq.SetEnabled(wowDir, patch, enabled), $"toggle patch {patch.Letter}"))
             {
                 count++;
@@ -952,7 +1331,7 @@ public partial class MainWindow : Window
         RefreshMpqList();
         if (count > 0)
         {
-            ShowTabToast($"{(enabled ? "Enabled" : "Disabled")} {count} patch(es).", ToastSeverity.Success);
+            ShowToast("MPQ Patches", $"{(enabled ? "Enabled" : "Disabled")} {count} patch(es).", ToastSeverity.Success);
         }
     }
 
@@ -964,22 +1343,25 @@ public partial class MainWindow : Window
     /// SetAllMpqEnabled, which shows one summary toast instead of one per iteration).
     /// </summary>
     private bool RunMpqOperation(Action action, string failureContext, string? successMessage = null)
+        => RunMpqOperation(() => { action(); return true; }, failureContext, successMessage);
+
+    private T? RunMpqOperation<T>(Func<T> action, string failureContext, string? successMessage = null)
     {
         try
         {
-            action();
+            T result = action();
             if (successMessage is not null)
             {
-                ShowTabToast(successMessage, ToastSeverity.Success);
+                ShowToast("MPQ Patches", successMessage, ToastSeverity.Success);
             }
 
-            return true;
+            return result;
         }
         catch (Exception ex)
         {
             _log.Error($"Failed to {failureContext}.", ex);
-            ShowTabToast($"Failed to {failureContext} — see the Log tab.", ToastSeverity.Error);
-            return false;
+            ShowToast("MPQ Patches", $"Failed to {failureContext}: {ex.Message}", ToastSeverity.Error);
+            return default;
         }
     }
 
@@ -1065,9 +1447,9 @@ public partial class MainWindow : Window
     }
 
     // AddAddonAsync is shared by the Installed tab's "Add" dialog and the Browse tab's Install
-    // button. Both sub-tabs live under the same top-level Addons tab, so ShowTabToast's per-tab
-    // (not per-sub-tab) scoping already routes this correctly regardless of which one triggered it -
-    // no separate AddonStatusText/MarketplaceStatusText split needed anymore (issue #13 removes it).
+    // button - both pass the fixed "Addons" source to ShowToast, so this routes correctly
+    // regardless of which one triggered it, no separate AddonStatusText/MarketplaceStatusText
+    // split needed anymore (issue #13 removes it).
     private async Task AddAddonAsync(string input)
     {
         if (_addonBusy)
@@ -1076,17 +1458,17 @@ public partial class MainWindow : Window
         }
 
         _addonBusy = true;
-        ShowTabToast("Installing…", ToastSeverity.Info, updateKey: "addon-install");
+        ShowToast("Addons", "Installing…", ToastSeverity.Info, updateKey: "addon-install");
         try
         {
             InstalledAddon addon = await _addons.AddAsync(input, CurrentWowDir());
             RefreshAddonList();
-            ShowTabToast($"Installed {WowColorTextParser.StripCodes(addon.Name)}.", ToastSeverity.Success, updateKey: "addon-install");
+            ShowToast("Addons", $"Installed {WowColorTextParser.StripCodes(addon.Name)}.", ToastSeverity.Success, updateKey: "addon-install");
         }
         catch (Exception ex)
         {
             _log.Error($"Addon install failed for {input}", ex);
-            ShowTabToast("Install failed — see the Log tab.", ToastSeverity.Error, updateKey: "addon-install");
+            ShowToast("Addons", $"Install failed: {ex.Message}", ToastSeverity.Error, updateKey: "addon-install");
         }
         finally
         {
@@ -1094,13 +1476,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnRemoveAddonClick(object sender, RoutedEventArgs e)
+    private async void OnRemoveAddonClick(object sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: InstalledAddon addon })
         {
-            _addons.Remove(addon, CurrentWowDir());
+            await _addons.RemoveAsync(addon, CurrentWowDir());
             RefreshAddonList();
-            ShowTabToast($"Removed {WowColorTextParser.StripCodes(addon.Name)}.", ToastSeverity.Success);
+            ShowToast("Addons", $"Removed {WowColorTextParser.StripCodes(addon.Name)}.", ToastSeverity.Success);
         }
     }
 
@@ -1112,7 +1494,7 @@ public partial class MainWindow : Window
         }
 
         string title = WowColorTextParser.StripCodes(addon.Name);
-        ShowTabToast($"Loading details for '{title}'...", ToastSeverity.Info, updateKey: "addon-details");
+        ShowToast("Addons", $"Loading details for '{title}'...", ToastSeverity.Info, updateKey: "addon-details");
         try
         {
             string markdown = await _addons.GetDetailsMarkdownAsync(addon, CurrentWowDir(), CancellationToken.None);
@@ -1139,7 +1521,7 @@ public partial class MainWindow : Window
             // errors, but this is an async void handler — anything that slips through uncaught here
             // would crash the whole app, not just fail this one dialog.
             _log.Error($"Could not load details for '{title}'.", ex);
-            ShowTabToast("Could not load addon details — see the Log tab.", ToastSeverity.Error);
+            ShowToast("Addons", $"Could not load addon details: {ex.Message}", ToastSeverity.Error);
         }
     }
 
@@ -1161,7 +1543,7 @@ public partial class MainWindow : Window
 
         if (updatable.Count == 0)
         {
-            ShowTabToast("No addon updates available.", ToastSeverity.Info);
+            ShowToast("Addons", "No addon updates available.", ToastSeverity.Info);
             return;
         }
 
@@ -1170,7 +1552,7 @@ public partial class MainWindow : Window
             await AddAddonAsync(addon.SourceRef!);
         }
 
-        ShowTabToast($"Updated {updatable.Count} addon(s).", ToastSeverity.Success);
+        ShowToast("Addons", $"Updated {updatable.Count} addon(s).", ToastSeverity.Success);
     }
 
     // The Addons tab's visible scrollbar is a standalone ScrollBar (see MainWindow.xaml) rather than
@@ -1237,11 +1619,11 @@ public partial class MainWindow : Window
                 }
             }
 
-            ShowTabToast("Checking for addon updates…", ToastSeverity.Info, updateKey: "addon-refresh");
+            ShowToast("Addons", "Checking for addon updates…", ToastSeverity.Info, updateKey: "addon-refresh");
             await _addons.CheckForUpdatesAsync(wowDir);
 
             RefreshAddonList();
-            ShowTabToast(
+            ShowToast("Addons", 
                 sync.AutoAdopted > 0
                     ? $"Refreshed. {sync.AutoAdopted} local addon(s) added automatically."
                     : "Refreshed.",
@@ -1254,7 +1636,7 @@ public partial class MainWindow : Window
             // here would propagate out of an async void handler and crash the whole app, not just
             // fail this one refresh.
             _log.Error("Addon refresh failed.", ex);
-            ShowTabToast("Addon refresh failed — see the Log tab.", ToastSeverity.Error, updateKey: "addon-refresh");
+            ShowToast("Addons", $"Addon refresh failed: {ex.Message}", ToastSeverity.Error, updateKey: "addon-refresh");
         }
         finally
         {
@@ -1481,7 +1863,7 @@ public partial class MainWindow : Window
         }
 
         _marketplaceBusy = true;
-        ShowTabToast("Loading catalog…", ToastSeverity.Info, updateKey: "marketplace-load");
+        ShowToast("Addons", "Loading catalog…", ToastSeverity.Info, updateKey: "marketplace-load");
         try
         {
             bool isLegacyWow = MarketplaceProviderCombo.SelectedIndex == 0;
@@ -1499,7 +1881,7 @@ public partial class MainWindow : Window
                     IReadOnlyList<MarketplaceAddonEntry> pageEntries =
                         await _marketplace.FetchWarperiaPageAsync(page, _warperiaSort, CancellationToken.None, forceRefresh);
                     fetched.AddRange(pageEntries);
-                    ShowTabToast($"Loading catalog… ({fetched.Count} so far)", ToastSeverity.Info, updateKey: "marketplace-load");
+                    ShowToast("Addons", $"Loading catalog… ({fetched.Count} so far)", ToastSeverity.Info, updateKey: "marketplace-load");
                     if (pageEntries.Count < WarperiaFullPageThreshold)
                     {
                         break;
@@ -1511,12 +1893,12 @@ public partial class MainWindow : Window
             _marketplaceRowCache.Clear();
 
             ApplyMarketplaceFilters();
-            ShowTabToast($"Showing {_marketplaceRows.Count} of {_marketplaceEntries.Count} addons.", ToastSeverity.Success, updateKey: "marketplace-load");
+            ShowToast("Addons", $"Showing {_marketplaceRows.Count} of {_marketplaceEntries.Count} addons.", ToastSeverity.Success, updateKey: "marketplace-load");
         }
         catch (Exception ex)
         {
             _log.Error("Marketplace catalog fetch failed", ex);
-            ShowTabToast("Could not load the catalog — see the Log tab.", ToastSeverity.Error, updateKey: "marketplace-load");
+            ShowToast("Addons", $"Could not load the catalog: {ex.Message}", ToastSeverity.Error, updateKey: "marketplace-load");
         }
         finally
         {
@@ -1679,10 +2061,10 @@ public partial class MainWindow : Window
                 return;
             }
 
-            _addons.Remove(installed, CurrentWowDir());
+            await _addons.RemoveAsync(installed, CurrentWowDir());
             RefreshAddonList();
             row.IsInstalled = false;
-            ShowTabToast($"Removed {WowColorTextParser.StripCodes(installed.Name)}.", ToastSeverity.Success);
+            ShowToast("Addons", $"Removed {WowColorTextParser.StripCodes(installed.Name)}.", ToastSeverity.Success);
             return;
         }
 
@@ -1697,17 +2079,19 @@ public partial class MainWindow : Window
             return;
         }
 
-        ShowTabToast($"Loading details for '{row.Entry.Name}'...", ToastSeverity.Info, updateKey: "marketplace-details");
+        ShowToast("Addons", $"Loading details for '{row.Entry.Name}'...", ToastSeverity.Info, updateKey: "marketplace-details");
         try
         {
             string markdown = await _marketplace.FetchAddonDetailsMarkdownAsync(row.Entry, CancellationToken.None);
-            var dialog = new AddonDetailsDialog(row.Entry.Name, markdown, ignoreUpdates: false, showIgnoreUpdates: false);
+            string repoLinkLabel = row.Entry.Source == "Warperia" ? "View on Warperia" : "View on Legacy-WoW";
+            var dialog = new AddonDetailsDialog(row.Entry.Name, markdown, ignoreUpdates: false, row.Entry.DetailUrl,
+                showIgnoreUpdates: false, repoLinkLabel: repoLinkLabel);
             ShowModal(dialog);
         }
         catch (Exception ex)
         {
             _log.Error($"Could not load marketplace details for '{row.Entry.Name}'.", ex);
-            ShowTabToast("Could not load addon details — see the Log tab.", ToastSeverity.Error, updateKey: "marketplace-details");
+            ShowToast("Addons", $"Could not load addon details: {ex.Message}", ToastSeverity.Error, updateKey: "marketplace-details");
         }
     }
 
@@ -1845,6 +2229,7 @@ public partial class MainWindow : Window
         PasswordBoxInput.Password = s.SavePassword ? _dirSettings.GetPassword() : string.Empty;
         DelayBox.Text = s.LoginDelayMs.ToString(CultureInfo.InvariantCulture);
         CleanWdbCheck.IsChecked = s.CleanWdbBeforeLaunch;
+        ConfigWtfCheck.IsChecked = s.ConfigWtfRewriteEnabled;
         RealmlistBox.Text = s.Realmlist;
 
         BuildPatchList();
@@ -1879,6 +2264,7 @@ public partial class MainWindow : Window
             ? Math.Max(0, d)
             : ds.LoginDelayMs;
         ds.CleanWdbBeforeLaunch = CleanWdbCheck.IsChecked == true;
+        ds.ConfigWtfRewriteEnabled = ConfigWtfCheck.IsChecked == true;
         ds.Realmlist = RealmlistBox.Text.Trim();
 
         _dirSettings.SetPassword(PasswordBoxInput.Password);
@@ -1924,6 +2310,13 @@ public partial class MainWindow : Window
         {
             await PersistSettingsFromUiAsync();
         }
+        catch (Exception ex)
+        {
+            // Same reasoning as OnPatchApplyTick's own catch - an async void timer tick has no
+            // caller that could catch this otherwise, only the global crash backstop.
+            _log.Error("Settings save tick failed unexpectedly.", ex);
+            ShowToast("Settings", $"Failed to save settings: {ex.Message}", ToastSeverity.Error);
+        }
         finally
         {
             _savingSettings = false;
@@ -1961,17 +2354,27 @@ public partial class MainWindow : Window
             // new directory from this collection pass. Reload everything scoped to it fresh instead
             // (this is also what actually fixes switching directories showing stale settings).
             _dirSettings.Load(wowDir);
+            _mpqMetadata.Load(wowDir);
+            _dllMetadata.Load(wowDir);
+            // Guarded so the bound field assignments inside don't each schedule their own redundant
+            // settings-save tick (ScheduleSettingsSave no-ops while _loading is true) - harmless
+            // either way since a follow-up save would just re-persist the same values, but wasteful.
+            _loading = true;
             LoadDirectorySettingsIntoUi();
+            _loading = false;
             RecordManagedDirectory(wowDir);
 
             RefreshDllList();
             RefreshDetectedDlls();
             RefreshIgnoredDllList();
             RefreshMpqList();
+            _ = RunRetroactiveMpqExtractionAsync();
             // Addon tracking (.teronwow-addons.json) lives inside each WoW directory - Load(wowDir)
             // has to run before RefreshAddonList can show anything real for the newly-selected one.
             _addons.Load(wowDir);
             RefreshAddonList();
+
+            ShowToast("Launcher", $"Switched to '{wowDir}'.", ToastSeverity.Success);
         }
         else
         {
@@ -1985,15 +2388,17 @@ public partial class MainWindow : Window
                 {
                     if (!_realmlist.Write(wowDir, realmlist))
                     {
-                        ShowGlobalToast("Warning: realmlist.wtf may not have saved correctly — see the Log tab.", ToastSeverity.Warning);
+                        ShowToast("Launcher", "Warning: realmlist.wtf may not have saved correctly — see the Log tab.", ToastSeverity.Warning);
                     }
                 }
                 catch (Exception ex)
                 {
                     _log.Error("Failed to write realmlist.wtf.", ex);
-                    ShowGlobalToast("Failed to write realmlist.wtf — see the Log tab.", ToastSeverity.Error);
+                    ShowToast("Launcher", $"Failed to write realmlist.wtf: {ex.Message}", ToastSeverity.Error);
                 }
             }
+
+            SyncConfigWtfToggle(wowDir);
         }
 
         UpdateGameFolderHint();
@@ -2007,8 +2412,56 @@ public partial class MainWindow : Window
         _lastAppliedWowDir = wowDir;
         _lastAppliedRealmlist = _dirSettings.Current.Realmlist;
         _lastAppliedClientUrl = clientUrl;
+        _lastAppliedConfigWtfEnabled = _dirSettings.Current.ConfigWtfRewriteEnabled;
 
-        ShowGlobalToast("Settings saved.", ToastSeverity.Success);
+        ShowToast("Launcher", "Settings saved.", ToastSeverity.Success);
+    }
+
+    /// <summary>
+    /// Applies or reverts the Config.WTF prerequisite toggle the moment it changes. Turning it on
+    /// snapshots each required key's current value first (so turning it off later restores exactly
+    /// that, not a stale snapshot from an earlier on/off cycle); turning it off restores from that
+    /// snapshot and clears it. Skipped (with a soft heads-up, not an error) while the game is running,
+    /// the same way executable-patch changes are — Config.WTF is re-applied fresh at the start of
+    /// every Play anyway (see LaunchOrchestrator.PlayAsync), so nothing is lost by waiting.
+    /// </summary>
+    private void SyncConfigWtfToggle(string wowDir)
+    {
+        bool enabled = _dirSettings.Current.ConfigWtfRewriteEnabled;
+        if (enabled == _lastAppliedConfigWtfEnabled || !Directory.Exists(wowDir))
+        {
+            return;
+        }
+
+        if (_processCheck.IsRunning(wowDir))
+        {
+            ShowToast("Launcher",
+                "Close the game to apply the Config.WTF change now — it will also be applied automatically on your next Play.",
+                ToastSeverity.Info);
+            return;
+        }
+
+        try
+        {
+            if (enabled)
+            {
+                _dirSettings.Current.ConfigWtfOriginalValues =
+                    _configWtf.ReadAll(wowDir, ConfigWtfService.RequiredSettings.Select(s => s.Key));
+                _configWtf.ApplyRequiredSettings(wowDir);
+            }
+            else
+            {
+                _configWtf.RestoreValues(wowDir, _dirSettings.Current.ConfigWtfOriginalValues);
+                _dirSettings.Current.ConfigWtfOriginalValues.Clear();
+            }
+
+            _dirSettings.Save(wowDir);
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Failed to update Config.WTF.", ex);
+            ShowToast("Launcher", $"Failed to update Config.WTF: {ex.Message}", ToastSeverity.Error);
+        }
     }
 
     private string CurrentWowDir()
@@ -2031,7 +2484,19 @@ public partial class MainWindow : Window
         _ = RefreshRealmStatusAsync();
     }
 
-    private async void OnRealmStatusTick(object? sender, EventArgs e) => await RefreshRealmStatusAsync();
+    private async void OnRealmStatusTick(object? sender, EventArgs e)
+    {
+        try
+        {
+            await RefreshRealmStatusAsync();
+        }
+        catch (Exception ex)
+        {
+            // Same reasoning as OnPatchApplyTick/OnSettingsSaveTick's own catch - this fires
+            // unattended on a 60s timer with no caller that could catch it otherwise.
+            _log.Error("Realm status tick failed unexpectedly.", ex);
+        }
+    }
 
     /// <summary>
     /// Probes the current realmlist's auth port and colors <see cref="RealmlistStatusDot"/> accordingly.
@@ -2201,7 +2666,7 @@ public partial class MainWindow : Window
         string wowDir = CurrentWowDir();
         if (!_install.IsInstalled(wowDir))
         {
-            ShowGlobalToast("Nothing installed to repair yet.", ToastSeverity.Info);
+            ShowToast("Settings", "Nothing installed to repair yet.", ToastSeverity.Info);
             return;
         }
 
@@ -2230,7 +2695,7 @@ public partial class MainWindow : Window
         string wowDir = CurrentWowDir();
         if (!_install.IsInstalled(wowDir))
         {
-            ShowGlobalToast("Nothing installed to delete.", ToastSeverity.Info);
+            ShowToast("Settings", "Nothing installed to delete.", ToastSeverity.Info);
             return;
         }
 
@@ -2270,14 +2735,14 @@ public partial class MainWindow : Window
             await Task.Run(() => _install.DeleteInstalledClientFiles(wowDir));
             _dirSettings.Current.InstalledClientSignature = null;
             _dirSettings.Save(wowDir);
-            ShowGlobalToast("Game files deleted.", ToastSeverity.Success);
+            ShowToast("Settings", "Game files deleted.", ToastSeverity.Success);
             UpdateGameFolderHint();
             await RefreshPlayButtonStateAsync();
         }
         catch (Exception ex)
         {
             _log.Error("Delete game files failed.", ex);
-            ShowGlobalToast("Delete failed — see the Log tab.", ToastSeverity.Error);
+            ShowToast("Settings", $"Delete failed: {ex.Message}", ToastSeverity.Error);
         }
         finally
         {
@@ -2395,7 +2860,7 @@ public partial class MainWindow : Window
             }
             catch (OperationCanceledException)
             {
-                ShowGlobalToast("Update download cancelled.", ToastSeverity.Warning);
+                ShowToast("Launcher", "Update download cancelled.", ToastSeverity.Warning);
                 return;
             }
             finally
@@ -2416,7 +2881,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _log.Warn($"Launcher update check failed: {ex.Message}");
-            ShowGlobalToast("Update check failed — see the Log tab.", ToastSeverity.Error);
+            ShowToast("Launcher", $"Update check failed: {ex.Message}", ToastSeverity.Error);
         }
     }
 
@@ -2664,7 +3129,7 @@ public partial class MainWindow : Window
         if (alreadyValid)
         {
             ok = true;
-            ShowGlobalToast("Existing 1.12.1 client verified — using it as-is.", ToastSeverity.Success);
+            ShowToast("Launcher", "Existing 1.12.1 client verified — using it as-is.", ToastSeverity.Success);
         }
         else
         {
@@ -2676,8 +3141,12 @@ public partial class MainWindow : Window
             _settings.Current.WowDirectory = targetDir;
             _settings.Save();
 
-            // Stop any pending debounce first: setting .Text below fires TextChanged, and without
-            // this it would schedule a redundant duplicate of the refresh/recheck we do right here.
+            // Guarded so setting .Text below (and the bound fields inside LoadDirectorySettingsIntoUi)
+            // don't each schedule their own redundant settings-save tick - ScheduleSettingsSave
+            // no-ops entirely while _loading is true, which is more reliable than the previous
+            // "stop the timer first" attempt (ScheduleSettingsSave restarts it right back up unless
+            // _loading is actually set).
+            _loading = true;
             _settingsSaveTimer.Stop();
             GameFolderBox.Text = targetDir;
             _lastAppliedWowDir = targetDir;
@@ -2687,12 +3156,16 @@ public partial class MainWindow : Window
             // and RefreshIgnoredDllList both depend on _dirSettings.Current.IgnoredDetectedDlls, which
             // otherwise would still reflect whichever directory was active before this install.
             _dirSettings.Load(targetDir);
+            _mpqMetadata.Load(targetDir);
+            _dllMetadata.Load(targetDir);
             LoadDirectorySettingsIntoUi();
+            _loading = false;
             RecordManagedDirectory(targetDir);
             RefreshDllList();
             RefreshDetectedDlls();
             RefreshIgnoredDllList();
             RefreshMpqList();
+            _ = RunRetroactiveMpqExtractionAsync();
             _addons.Load(targetDir);
             RefreshAddonList();
 
@@ -2749,7 +3222,7 @@ public partial class MainWindow : Window
             string? signature = await _install.DownloadAndInstallAsync(CurrentClientUrl(), targetDir, progress, _downloadCts.Token);
             _dirSettings.Current.InstalledClientSignature = signature;
             _dirSettings.Save(targetDir);
-            ShowGlobalToast(successMessage, ToastSeverity.Success);
+            ShowToast("Launcher", successMessage, ToastSeverity.Success);
             await RefreshPlayButtonStateAsync();
             return true;
         }
@@ -2761,19 +3234,29 @@ public partial class MainWindow : Window
                 // and PauseResumeButton (now showing Resume) all stay visible so the user can pick
                 // this same download back up. The partial file is deliberately left alone here
                 // (unlike a hard Cancel via OnCancelDownloadClick) so Resume can continue from it.
-                ProgressStatusText.Text += " — paused";
+                //
+                // Guarded rather than a plain +=: OnInstallProgress overwrites this text wholesale
+                // (Text = ...) on each real progress tick, which normally clears a prior " — paused"
+                // suffix - but if the user pauses, resumes, and pauses again before any fresh tick
+                // actually arrives to do that overwrite, a plain += kept stacking another " — paused"
+                // onto whatever was already there ("— paused — paused — paused...", confirmed via
+                // screenshots showing 2 and then 3 stacked suffixes, 2026-07-19).
+                if (!ProgressStatusText.Text.EndsWith(" — paused", StringComparison.Ordinal))
+                {
+                    ProgressStatusText.Text += " — paused";
+                }
                 _pausedDownloadParams = (targetDir, successMessage, failureMessage, color);
                 return false;
             }
 
             _install.DeletePartialDownload();
-            ShowGlobalToast("Download cancelled.", ToastSeverity.Warning);
+            ShowToast("Launcher", "Download cancelled.", ToastSeverity.Warning);
             return false;
         }
         catch (Exception ex)
         {
             _log.Error($"{failureMessage}.", ex);
-            ShowGlobalToast($"{failureMessage} — see the Log tab.", ToastSeverity.Error);
+            ShowToast("Launcher", $"{failureMessage}: {ex.Message}", ToastSeverity.Error);
             return false;
         }
         finally
@@ -2806,6 +3289,7 @@ public partial class MainWindow : Window
         {
             _downloadPaused = false;
             SetPauseResumeGlyph(paused: false);
+            ResumeProgressBarStripeAnimation();
             if (_pausedDownloadParams is { } p)
             {
                 _pausedDownloadParams = null;
@@ -2816,6 +3300,7 @@ public partial class MainWindow : Window
         {
             _downloadPaused = true;
             SetPauseResumeGlyph(paused: true);
+            PauseProgressBarStripeAnimation();
             _downloadCts?.Cancel();
         }
     }
@@ -2872,12 +3357,16 @@ public partial class MainWindow : Window
         {
             _pausedDownloadParams = null;
             _install.DeletePartialDownload();
+            // Cancelling while paused otherwise leaves the stripe animation's Clock paused
+            // indefinitely - it wouldn't resume on its own for whatever future operation next shows
+            // the bar, since only OnPauseResumeClick's own Resume branch normally undoes this.
+            ResumeProgressBarStripeAnimation();
             MainProgressBar.Visibility = Visibility.Collapsed;
             PauseResumeButton.Visibility = Visibility.Collapsed;
             CancelDownloadButton.Visibility = Visibility.Collapsed;
             ProgressStatusText.Text = string.Empty;
             SetLaunchOperationBusy(false);
-            ShowGlobalToast("Download cancelled.", ToastSeverity.Warning);
+            ShowToast("Launcher", "Download cancelled.", ToastSeverity.Warning);
         }
     }
 
@@ -2896,6 +3385,176 @@ public partial class MainWindow : Window
         }
     }
 
+    private bool _progressBarStripeAnimationStarted;
+    private AnimationClock? _progressBarStripeClock;
+    private System.Windows.Shapes.Rectangle? _progressBarStripeOverlay;
+
+    // Tile pitch (must match BuildStripeGeometry's own spacing) and how far right to pre-build
+    // stripes - generously beyond any realistic window/bar width, built once rather than rebuilt
+    // per resize, since regenerating ~150 simple parallelograms is cheap enough to just over-provision.
+    private const double ProgressStripeTilePitch = 20;
+    private const double ProgressStripeMaxWidth = 3000;
+
+    // Exact extent of the geometry BuildStripeGeometry produces, used to pin the DrawingBrush's
+    // Viewbox/Viewport to an absolute identity mapping (see OnMainProgressBarLoaded for why that
+    // pinning is load-bearing). Left starts two tile-pitches before 0 so that even at the scroll
+    // animation's maximum displacement (+1 pitch) the leftmost painted stripe is still fully off-view
+    // left of the bar's border. Right: the loop's last figure starts at ProgressStripeMaxWidth and
+    // its top edge extends one more pitch. Height 40 covers the bar's actual content height.
+    private const double ProgressStripeGeometryLeft = -2 * ProgressStripeTilePitch;
+    private const double ProgressStripeGeometryRight = ProgressStripeMaxWidth + ProgressStripeTilePitch;
+    private const double ProgressStripeGeometryHeight = 40;
+
+    /// <summary>
+    /// Builds PART_StripeOverlay's fill by hand-constructing one continuous, non-tiled geometry
+    /// (many explicit repeated parallelograms) and animating the whole brush via
+    /// ApplyAnimationClock, rather than a DrawingBrush TileMode="Tile" - a real, reproducing mid-bar
+    /// seam persisted (confirmed via screenshot, 2026-07-19) even after removing the per-tick resize
+    /// that was the first suspected cause, pointing at WPF's own tiled-brush rasterization as the
+    /// actual source of the seam rather than anything about resizing. A single continuous
+    /// hand-built geometry has no tile boundary for that to happen across. Also why this builds and
+    /// assigns the brush fresh in code rather than reading one declared in the template: a
+    /// template-declared Freezable is frozen by default (shared across every instance of the styled
+    /// control), which is what "Cannot animate... because the object is sealed or frozen" was about
+    /// the first time this was tried - a freshly code-constructed brush was never frozen to begin
+    /// with, since it's never part of any shared Style/Template resource.
+    ///
+    /// Loaded can fire more than once (observed re-firing on a window resize's Loaded re-broadcast),
+    /// so this guards against rebuilding/restarting the animation clock redundantly on every refire.
+    /// </summary>
+    private void OnMainProgressBarLoaded(object sender, RoutedEventArgs e)
+    {
+        if (_progressBarStripeAnimationStarted)
+        {
+            return;
+        }
+
+        MainProgressBar.ApplyTemplate();
+        if (MainProgressBar.Template.FindName("PART_StripeOverlay", MainProgressBar) is not System.Windows.Shapes.Rectangle overlay)
+        {
+            return;
+        }
+
+        var translate = new TranslateTransform(0, 0);
+
+        // Viewbox and Viewport are BOTH pinned to the geometry's exact absolute extent, making the
+        // brush a strict identity mapping: geometry coordinate x paints at overlay coordinate x,
+        // period. Without this, both default to RelativeToBoundingBox, which auto-fits the DRAWING'S
+        // BOUNDING BOX onto the overlay rectangle - pinning the drawing's left boundary to the bar's
+        // left border no matter how much off-view margin the geometry builds in (the margin is part
+        // of the bounding box, so the auto-fit swallows it). The scroll animation then dragged that
+        // boundary rightward by one full tile-pitch every cycle before snapping back, sweeping a
+        // 0-to-20px UNPAINTED void into view at the bar's start once per loop. That void - solid
+        // indicator color with no stripes, growing and collapsing in sync with the animation - was
+        // the long-standing "pooling at the start" issue (root-caused 2026-07-19 via a solid
+        // red-indicator/lime-stripes diagnostic build: the start showed pure red for most of each
+        // cycle, and the pattern's left edge visibly oscillated between the border and one stripe
+        // length in). It also explains why an added leading-edge fade did nothing: opacity masks
+        // can't paint content into a region the brush never painted. With the identity mapping, the
+        // geometry's two-tile-pitch left margin genuinely sits off-view, so the painted region still
+        // covers the whole bar even at maximum scroll displacement.
+        var stripeBounds = new Rect(
+            ProgressStripeGeometryLeft, 0,
+            ProgressStripeGeometryRight - ProgressStripeGeometryLeft, ProgressStripeGeometryHeight);
+        var brush = new DrawingBrush(new GeometryDrawing(
+            new SolidColorBrush(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF)), null, BuildStripeGeometry()))
+        {
+            ViewboxUnits = BrushMappingMode.Absolute,
+            Viewbox = stripeBounds,
+            ViewportUnits = BrushMappingMode.Absolute,
+            Viewport = stripeBounds,
+            Stretch = Stretch.Fill,
+            Transform = translate,
+        };
+        overlay.Fill = brush;
+        _progressBarStripeOverlay = overlay;
+
+        // Created as an explicit Clock (not the simple BeginAnimation(dp, animation) overload) so
+        // OnPauseResumeClick can actually pause/resume it later - the simple overload doesn't hand
+        // back anything controllable, which is why pausing a download previously left the stripe
+        // still visibly scrolling for the duration of the pause (reported 2026-07-19).
+        _progressBarStripeAnimationStarted = true;
+        var animation = new DoubleAnimation(0, ProgressStripeTilePitch, TimeSpan.FromSeconds(0.6)) { RepeatBehavior = RepeatBehavior.Forever };
+        _progressBarStripeClock = animation.CreateClock();
+        translate.ApplyAnimationClock(TranslateTransform.XProperty, _progressBarStripeClock);
+    }
+
+    /// <summary>
+    /// One continuous StreamGeometry containing many explicit parallelogram stripes at a fixed 20px
+    /// pitch, spanning ProgressStripeGeometryLeft..ProgressStripeGeometryRight - the brush that
+    /// paints it maps these coordinates 1:1 onto the overlay (see OnMainProgressBarLoaded), which is
+    /// what makes the off-view left margin real rather than swallowed by bounding-box auto-fitting.
+    /// Tall enough to cover MainProgressBar's actual content height in a single row, rather than
+    /// relying on any vertical tiling.
+    ///
+    /// Each figure is a true parallelogram: bottom edge [x, x+stripeWidth], top edge shifted right
+    /// by one full pitch, so both slanted sides share the same slope and the horizontal
+    /// cross-section is a constant stripeWidth at every height. Note the closing side's slope is
+    /// (pitch - stripeWidth) over the height while the drawn side's is stripeWidth over the height -
+    /// these only match when stripeWidth is exactly half the pitch, so changing the stripe/gap ratio
+    /// requires reshaping the figure, not just widening stripeWidth (tried 2026-07-19 with 0.8x
+    /// pitch: the shapes warped into near-vertical trapezoids and lost their slant entirely).
+    /// </summary>
+    private static StreamGeometry BuildStripeGeometry()
+    {
+        const double stripeWidth = ProgressStripeTilePitch / 2;
+
+        var geometry = new StreamGeometry();
+        using (StreamGeometryContext ctx = geometry.Open())
+        {
+            for (double x = ProgressStripeGeometryLeft; x <= ProgressStripeMaxWidth; x += ProgressStripeTilePitch)
+            {
+                ctx.BeginFigure(new Point(x, ProgressStripeGeometryHeight), true, true);
+                ctx.LineTo(new Point(x + stripeWidth, ProgressStripeGeometryHeight), false, false);
+                ctx.LineTo(new Point(x + ProgressStripeTilePitch, 0), false, false);
+                ctx.LineTo(new Point(x + stripeWidth, 0), false, false);
+            }
+        }
+
+        geometry.Freeze();
+        return geometry;
+    }
+
+    private void PauseProgressBarStripeAnimation() => _progressBarStripeClock?.Controller?.Pause();
+
+    private void ResumeProgressBarStripeAnimation() => _progressBarStripeClock?.Controller?.Resume();
+
+    /// <summary>
+    /// Fades out the last ~20px (one tile pitch) of the currently-revealed stripe region. The clip
+    /// that reveals the stripe pattern sweeps left-to-right with a straight vertical edge, but the
+    /// stripes themselves are diagonal - the newest stripe sitting right at that boundary only has a
+    /// thin partial cross-section visible until the sweep has moved far enough past it, which read as
+    /// the pattern "pooling" before resolving into a clean stripe (reported 2026-07-19). Every stripe
+    /// further back is already fully revealed and unaffected - only the one currently transitioning
+    /// needs hiding until it's swept far enough into view to look complete.
+    ///
+    /// There's no equivalent fade at the fixed left border - fading opacity can only ever remove
+    /// coverage, never add it, so it can't help the periodic gap that lands there as the pattern
+    /// scrolls past a fixed clip edge (a moving periodic pattern behind a fixed window must cycle
+    /// through every phase, confirmed via screenshots 2026-07-19). That's addressed instead in
+    /// BuildStripeGeometry by narrowing the gap relative to the stripe width.
+    /// </summary>
+    private void UpdateProgressBarStripeFadeMask(double fillWidthPx)
+    {
+        if (_progressBarStripeOverlay is null)
+        {
+            return;
+        }
+
+        const double fadeWidth = ProgressStripeTilePitch;
+        _progressBarStripeOverlay.OpacityMask = new LinearGradientBrush
+        {
+            MappingMode = BrushMappingMode.Absolute,
+            StartPoint = new Point(Math.Max(0, fillWidthPx - fadeWidth), 0),
+            EndPoint = new Point(fillWidthPx, 0),
+            GradientStops =
+            {
+                new GradientStop(Colors.White, 0),
+                new GradientStop(Color.FromArgb(0, 255, 255, 255), 1),
+            },
+        };
+    }
+
     // Reused by both the client download flow above and the launcher self-update download
     // (CheckForLauncherUpdateAsync) - writes to ProgressStatusText (attached directly to
     // MainProgressBar) rather than a toast, since this fires continuously throughout one operation
@@ -2904,7 +3563,18 @@ public partial class MainWindow : Window
     {
         MainProgressBar.IsIndeterminate = false;
         double pct = p.Total > 0 ? (double)p.Downloaded / p.Total * 100 : 0;
-        MainProgressBar.Value = pct;
+
+        // Animated rather than a direct Value set - snapping straight to each raw byte-count
+        // percentage made the visible fill jump/jitter with every download-speed spike (reported
+        // 2026-07-19). BeginAnimation's default HandoffBehavior (SnapshotAndReplace) smoothly
+        // redirects from wherever the fill currently is toward each new target, even when updates
+        // arrive faster than this animation's own duration, rather than restarting from 0 each time.
+        var valueAnimation = new DoubleAnimation(pct, TimeSpan.FromMilliseconds(400))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+        };
+        MainProgressBar.BeginAnimation(RangeBase.ValueProperty, valueAnimation);
+        UpdateProgressBarStripeFadeMask(MainProgressBar.ActualWidth * pct / 100);
 
         // Speed and ETA both come from the same InstallProgress.BytesPerSecond, so this covers every
         // caller uniformly - client download/repair/update, extraction, and the launcher's own
@@ -2964,7 +3634,7 @@ public partial class MainWindow : Window
         {
             _wowAlreadyRunning = true;
             UpdatePlayButtonEnabled();
-            ShowGlobalToast("WoW is already running from this game folder — close it first.", ToastSeverity.Warning);
+            ShowToast("Launcher", "WoW is already running from this game folder — close it first.", ToastSeverity.Warning);
             return;
         }
 
@@ -2989,7 +3659,7 @@ public partial class MainWindow : Window
                 cancelText: "Cancel");
             if (ShowModal(confirm) != true)
             {
-                ShowGlobalToast("Launch cancelled — resolve the Signature Removal / MPQ patch conflict first.", ToastSeverity.Warning);
+                ShowToast("Launcher", "Launch cancelled — resolve the Signature Removal / MPQ patch conflict first.", ToastSeverity.Warning);
                 return;
             }
 
@@ -3007,20 +3677,28 @@ public partial class MainWindow : Window
 
         if (_dirSettings.Current.CleanWdbBeforeLaunch)
         {
-            _gameCache.Clear(CurrentWowDir());
+            // CurrentWowDir() reads GameFolderBox.Text, a UI element - must be resolved on this
+            // (the UI) thread before handing off to Task.Run, not called from inside the background
+            // lambda (which would throw "the calling thread cannot access this object").
+            string wowDirForCacheClear = CurrentWowDir();
+
+            // Off the calling thread - WDB can accumulate hundreds to low-thousands of small files
+            // on a long-lived install, and this runs on every single Play click when the toggle is
+            // on, directly on the UI thread otherwise.
+            await Task.Run(() => _gameCache.Clear(wowDirForCacheClear));
         }
 
         SetLaunchOperationBusy(true);
-        var progress = new Progress<string>(msg => ShowGlobalToast(msg, ToastSeverity.Info));
+        var progress = new Progress<string>(msg => ShowToast("Launcher", msg, ToastSeverity.Info));
         try
         {
             PlayResult result = await _orchestrator.PlayAsync(progress, OnGameProcessLaunched);
-            ShowGlobalToast(result.Success ? "Launched." : "Launch failed — see the Log tab.", result.Success ? ToastSeverity.Success : ToastSeverity.Error);
+            ShowToast("Launcher", result.Success ? "Launched." : "Launch failed — see the Log tab.", result.Success ? ToastSeverity.Success : ToastSeverity.Error);
         }
         catch (Exception ex)
         {
             _log.Error("Unexpected error during launch.", ex);
-            ShowGlobalToast("Launch failed — see the Log tab.", ToastSeverity.Error);
+            ShowToast("Launcher", $"Launch failed: {ex.Message}", ToastSeverity.Error);
         }
         finally
         {
@@ -3063,7 +3741,14 @@ public partial class MainWindow : Window
     // ---------------- Toasts (issue #13) ----------------
 
     private static readonly TimeSpan ToastFadeDuration = TimeSpan.FromMilliseconds(180);
-    private static readonly TimeSpan ToastAutoDismissDelay = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan ToastAutoDismissDelay = TimeSpan.FromSeconds(10);
+
+    // Once a card has been hovered at least once, every dismiss countdown after that point (i.e.
+    // from when the mouse leaves) is capped at this shorter delay instead of the full
+    // ToastAutoDismissDelay - hovering pauses the countdown entirely while the mouse is over it (so
+    // it never disappears mid-read), but shouldn't let a toast linger indefinitely once you've
+    // actually had a look at it.
+    private static readonly TimeSpan ToastHoverDismissDelay = TimeSpan.FromSeconds(5);
 
     private Brush SeverityBrush(ToastSeverity severity) => (Brush)FindResource(severity switch
     {
@@ -3072,6 +3757,15 @@ public partial class MainWindow : Window
         ToastSeverity.Error => "RemoveActionBrush",
         _ => "InstallActionBrush",
     });
+
+    // Segoe Fluent Icons glyphs: checkmark-circle, info-circle, warning triangle, error-circle.
+    private static string SeverityIconGlyph(ToastSeverity severity) => severity switch
+    {
+        ToastSeverity.Success => "",
+        ToastSeverity.Warning => "",
+        ToastSeverity.Error => "",
+        _ => "",
+    };
 
     private static void FadeTo(UIElement element, double to, Action? onCompleted = null)
     {
@@ -3084,96 +3778,95 @@ public partial class MainWindow : Window
         element.BeginAnimation(UIElement.OpacityProperty, animation);
     }
 
-    // ---- Global toast: single-slot, replaces the footer's old plain StatusText TextBlock ----
+    // ---- Unified toast stack: up to 10 cards floating top-right, above every tab. Every call site
+    // passes its own fixed source label explicitly (never derived from whichever tab happens to be
+    // selected) - a card's title can never end up wrong just because the user switched tabs while an
+    // async operation was still in flight, and cards no longer need clearing on tab switch either. ----
 
-    private DispatcherTimer? _globalToastTimer;
+    private const int MaxToastCards = 10;
 
-    private void ShowGlobalToast(string message, ToastSeverity severity)
+    // Maps a toast's source label to the nav tab it should jump to on click - matches the
+    // RadioButton Tag order in MainWindow.xaml. "Launcher" has no entry: whole-launcher messages
+    // aren't scoped to any single tab, so they aren't clickable.
+    private static readonly Dictionary<string, int> ToastSourceTabIndex = new()
     {
-        _globalToastTimer?.Stop();
+        ["Home"] = 0,
+        ["Tweaks"] = 1,
+        ["DLLs"] = 2,
+        ["MPQ Patches"] = 3,
+        ["Addons"] = 4,
+        ["Settings"] = 5,
+        ["Log"] = 6,
+    };
 
-        GlobalToastText.Text = message;
-        GlobalToastBorder.BorderBrush = SeverityBrush(severity);
-        // Unconditional, not gated on current Visibility: a message arriving while the previous one
-        // is still mid fade-out (BeginAnimation replaces the in-flight animation on the same
-        // property) would otherwise keep fading toward 0 instead of showing the new one.
-        GlobalToastBorder.Visibility = Visibility.Visible;
-        FadeTo(GlobalToastBorder, 1);
-
-        if (severity is ToastSeverity.Info or ToastSeverity.Success)
-        {
-            _globalToastTimer = new DispatcherTimer { Interval = ToastAutoDismissDelay };
-            _globalToastTimer.Tick += (_, _) =>
-            {
-                _globalToastTimer!.Stop();
-                DismissGlobalToast();
-            };
-            _globalToastTimer.Start();
-        }
-    }
-
-    private void DismissGlobalToast()
-    {
-        _globalToastTimer?.Stop();
-        FadeTo(GlobalToastBorder, 0, () => GlobalToastBorder.Visibility = Visibility.Collapsed);
-    }
-
-    private void OnCloseGlobalToast(object sender, RoutedEventArgs e) => DismissGlobalToast();
-
-    // ---- Tab toast: stack of up to 5 cards floating over the active top-level tab ----
-
-    private const int MaxTabToastCards = 5;
-
-    private sealed class TabToastCard
+    private sealed class ToastCard
     {
         public required Border Border { get; init; }
         public required TextBlock MessageText { get; init; }
-        public required int TabIndex { get; init; }
+        public required TextBlock Icon { get; init; }
+        public required ToastSeverity Severity { get; set; }
+        public bool HasBeenHovered { get; set; }
         public string? UpdateKey { get; init; }
         public DispatcherTimer? Timer { get; set; }
     }
 
-    private readonly List<TabToastCard> _tabToastCards = new();
+    private readonly List<ToastCard> _toastCards = new();
 
     /// <summary>
     /// updateKey lets a rapidly-repeating operation (e.g. "Loading catalog… (N so far)" while
-    /// paging Warperia) update one card in place instead of flooding the 5-slot stack with
+    /// paging Warperia) update one card in place instead of flooding the toast stack with
     /// near-duplicate entries - omit it for the common case of one distinct, finished event.
     /// </summary>
-    private void ShowTabToast(string message, ToastSeverity severity, string? updateKey = null)
+    private void ShowToast(string source, string message, ToastSeverity severity, string? updateKey = null)
     {
         if (updateKey is not null)
         {
-            TabToastCard? existing = _tabToastCards.FirstOrDefault(c => c.UpdateKey == updateKey);
+            ToastCard? existing = _toastCards.FirstOrDefault(c => c.UpdateKey == updateKey);
             if (existing is not null)
             {
                 existing.MessageText.Text = message;
+                existing.Icon.Text = SeverityIconGlyph(severity);
+                existing.Icon.Foreground = SeverityBrush(severity);
                 existing.Border.BorderBrush = SeverityBrush(severity);
-                RestartTabToastTimer(existing, severity);
+                existing.Severity = severity;
+                RestartToastTimer(existing, severity);
                 return;
             }
         }
 
-        if (_tabToastCards.Count >= MaxTabToastCards)
+        if (_toastCards.Count >= MaxToastCards)
         {
-            RemoveTabToastCard(_tabToastCards[0]);
+            // Prefer evicting the oldest Info/Success card - Warning/Error are supposed to persist
+            // until manually dismissed, so the cap shouldn't silently break that guarantee under
+            // normal load. Only fall back to strict oldest-first if every slot is Warning/Error.
+            ToastCard toEvict = _toastCards.FirstOrDefault(c => c.Severity is ToastSeverity.Info or ToastSeverity.Success)
+                ?? _toastCards[0];
+            RemoveToastCard(toEvict);
         }
 
-        TabToastCard card = CreateTabToastCard(message, severity, updateKey);
-        _tabToastCards.Add(card);
-        TabToastHost.Children.Add(card.Border);
+        ToastCard card = CreateToastCard(source, message, severity, updateKey);
+        _toastCards.Add(card);
+        ToastHost.Children.Add(card.Border);
         FadeTo(card.Border, 1);
-        RestartTabToastTimer(card, severity);
+        RestartToastTimer(card, severity);
     }
 
-    private TabToastCard CreateTabToastCard(string message, ToastSeverity severity, string? updateKey)
+    private ToastCard CreateToastCard(string source, string message, ToastSeverity severity, string? updateKey)
     {
+        var titleText = new TextBlock
+        {
+            Text = $"{source}:",
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 13,
+            Foreground = (Brush)new BrushConverter().ConvertFromString("#E6C067")!,
+            Margin = new Thickness(0, 0, 0, 2),
+        };
+
         var messageText = new TextBlock
         {
             Text = message,
             Style = (Style)FindResource("CaptionText"),
             TextWrapping = TextWrapping.Wrap,
-            MaxWidth = 360,
         };
 
         var closeButton = new Button
@@ -3189,38 +3882,100 @@ public partial class MainWindow : Window
             Width = 16,
             Height = 16,
             Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Top,
         };
         DockPanel.SetDock(closeButton, Dock.Right);
 
-        var content = new DockPanel();
-        content.Children.Add(closeButton);
-        content.Children.Add(messageText);
+        var icon = new TextBlock
+        {
+            Text = SeverityIconGlyph(severity),
+            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            FontSize = 20,
+            Foreground = SeverityBrush(severity),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            // Segoe Fluent Icons glyphs sit in the upper part of their line box, so centering the
+            // TextBlock itself (which centers the full line box, not the glyph's visible ink) reads
+            // as slightly-too-high - this nudges it down to compensate.
+            Margin = new Thickness(0, 3, 10, 0),
+        };
+
+        var textStack = new StackPanel();
+        textStack.Children.Add(titleText);
+        textStack.Children.Add(messageText);
+
+        var textArea = new DockPanel();
+        textArea.Children.Add(closeButton);
+        textArea.Children.Add(textStack);
+
+        // Two columns: icon sized to itself (centered both ways within that column), text area takes
+        // the rest - both driven by the same Auto row height as the rest of the card, so the icon
+        // stays vertically centered regardless of how many lines the message wraps to.
+        var layout = new Grid();
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        Grid.SetColumn(icon, 0);
+        Grid.SetColumn(textArea, 1);
+        layout.Children.Add(icon);
+        layout.Children.Add(textArea);
 
         var border = new Border
         {
+            Width = 340,
             Background = (Brush)new BrushConverter().ConvertFromString("#1B1B1F")!,
             BorderBrush = SeverityBrush(severity),
-            BorderThickness = new Thickness(1),
+            BorderThickness = new Thickness(2),
             CornerRadius = new CornerRadius(6),
             Padding = new Thickness(10, 8, 10, 8),
             Margin = new Thickness(0, 4, 0, 0),
             Opacity = 0,
-            Child = content,
+            Child = layout,
         };
 
-        var card = new TabToastCard
+        var card = new ToastCard
         {
             Border = border,
             MessageText = messageText,
-            TabIndex = MainTabs.SelectedIndex,
+            Icon = icon,
+            Severity = severity,
             UpdateKey = updateKey,
         };
 
-        closeButton.Click += (_, _) => RemoveTabToastCard(card);
+        closeButton.Click += (_, _) => RemoveToastCard(card);
+
+        // Hovering pauses the dismiss countdown entirely (so it never vanishes mid-read); once the
+        // mouse leaves, every future countdown for this card is capped at ToastHoverDismissDelay
+        // instead of the full ToastAutoDismissDelay - use card.Severity, not the closure-captured
+        // severity parameter, since ShowToast's updateKey merge path can change a card's severity
+        // after creation and this must always reflect its current one.
+        border.MouseEnter += (_, _) =>
+        {
+            card.HasBeenHovered = true;
+            card.Timer?.Stop();
+        };
+        border.MouseLeave += (_, _) => RestartToastTimer(card, card.Severity);
+
+        // Click-to-view-source: jump to the tab this toast came from, for any source that actually
+        // maps to one ("Launcher" messages aren't scoped to a single tab, so they stay non-clickable).
+        // Guarded against the close button specifically so dismissing a toast never also navigates.
+        if (ToastSourceTabIndex.TryGetValue(source, out int tabIndex))
+        {
+            border.Cursor = System.Windows.Input.Cursors.Hand;
+            border.MouseLeftButtonUp += (_, e) =>
+            {
+                if (ReferenceEquals(e.OriginalSource, closeButton))
+                {
+                    return;
+                }
+
+                MainTabs.SelectedIndex = tabIndex;
+            };
+        }
+
         return card;
     }
 
-    private void RestartTabToastTimer(TabToastCard card, ToastSeverity severity)
+    private void RestartToastTimer(ToastCard card, ToastSeverity severity)
     {
         card.Timer?.Stop();
         card.Timer = null;
@@ -3230,37 +3985,20 @@ public partial class MainWindow : Window
             return;
         }
 
-        card.Timer = new DispatcherTimer { Interval = ToastAutoDismissDelay };
+        card.Timer = new DispatcherTimer { Interval = card.HasBeenHovered ? ToastHoverDismissDelay : ToastAutoDismissDelay };
         card.Timer.Tick += (_, _) =>
         {
             card.Timer!.Stop();
-            RemoveTabToastCard(card);
+            RemoveToastCard(card);
         };
         card.Timer.Start();
     }
 
-    private void RemoveTabToastCard(TabToastCard card)
+    private void RemoveToastCard(ToastCard card)
     {
         card.Timer?.Stop();
-        _tabToastCards.Remove(card);
-        FadeTo(card.Border, 0, () => TabToastHost.Children.Remove(card.Border));
-    }
-
-    // Tab toasts don't follow the user or persist for later - switching top-level tabs immediately
-    // fades out every card that doesn't belong to the newly-selected tab, deliberately, to avoid
-    // recreating the "message shown on the wrong tab" bug this whole feature originated from.
-    private void OnMainTabsSelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (e.Source != MainTabs)
-        {
-            return;
-        }
-
-        int activeIndex = MainTabs.SelectedIndex;
-        foreach (TabToastCard card in _tabToastCards.Where(c => c.TabIndex != activeIndex).ToList())
-        {
-            RemoveTabToastCard(card);
-        }
+        _toastCards.Remove(card);
+        FadeTo(card.Border, 0, () => ToastHost.Children.Remove(card.Border));
     }
 
     // ---------------- Shared ----------------
@@ -3286,7 +4024,7 @@ public partial class MainWindow : Window
     private void OnClearLog(object sender, RoutedEventArgs e)
     {
         _logItems.Clear();
-        ShowTabToast("Log view cleared.", ToastSeverity.Success);
+        ShowToast("Log", "Log view cleared.", ToastSeverity.Success);
     }
 
     private void OnCopyLog(object sender, RoutedEventArgs e)
@@ -3297,12 +4035,12 @@ public partial class MainWindow : Window
         try
         {
             Clipboard.SetText(text);
-            ShowTabToast("Log copied to clipboard.", ToastSeverity.Success);
+            ShowToast("Log", "Log copied to clipboard.", ToastSeverity.Success);
         }
         catch
         {
             // clipboard can be transiently locked by another app
-            ShowTabToast("Could not copy the log - clipboard may be in use by another app.", ToastSeverity.Error);
+            ShowToast("Log", "Could not copy the log - clipboard may be in use by another app.", ToastSeverity.Error);
         }
     }
 

@@ -49,27 +49,32 @@ account, realmlist, tweaks, patches, DLLs, and addons.
 ### Tweaks
 
 Client-side quality-of-life patches, applied by rebuilding `WoW.exe` from an untouched backup
-every time you change something — never patching an already-patched file. Large Address Aware,
-widescreen field of view (shown in degrees, not raw radians), render/grass/nameplate distance,
-sound channels, sound-while-alt-tabbed, auto-loot, and a camera rotation glitch fix are all here,
-most with a slider *and* a type-in box for the exact value you want. Every change applies the
-moment you make it — there's no "Save" button to remember.
+every time you change something — never patching an already-patched file. Split into **Mandatory**
+(Signature Removal, Large Address Aware, and a Config.WTF toggle that forces the video settings
+some HD/visual MPQ patches need) — enable all three if you plan to run custom MPQ patches — and
+**Optional**: widescreen field of view (shown in degrees, not raw radians), render/grass/nameplate
+distance, sound channels, sound-while-alt-tabbed, auto-loot, and a camera rotation glitch fix, most
+with a slider *and* a type-in box for the exact value you want. Every change applies the moment you
+make it — there's no "Save" button to remember.
 
 ### DLLs
 
-Two lists, side by side: the DLLs the launcher actually injects on launch (in load order, top to
-bottom — drag them into place with the move buttons), and DLLs sitting in your game folder that
-aren't tracked yet. Each entry shows its version, author, and description where the file itself
-provides that information, so you're not guessing what `d3d9.dll` actually is from the name alone.
-Add a detected DLL to start tracking it, or ignore one permanently if it's not meant to be
-injected (a framework DLL, say) — ignored files stay out of the detected list until you
-un-ignore them from Settings.
+One list: DLLs the launcher injects on launch (in load order, top to bottom — drag them into place
+with the move buttons) grouped above everything else sitting in your game folder that isn't
+tracked yet, searchable by name. Each row shows its version, author, and description where the
+file itself provides that information — and where it doesn't (most small hand-built mod DLLs
+don't), an info button lets you fill it in by hand. Per-row buttons track/untrack a DLL directly,
+or ignore a detected one permanently if it's not meant to be injected (a framework DLL, say) —
+ignored files stay out of the detected list until you un-ignore them from Settings.
 
 ### MPQ Patches
 
 Custom `patch-A.mpq` … `patch-Z.mpq` archives in your `Data\` folder, toggled on and off with
 checkboxes (an unchecked patch is simply renamed with a leading underscore, so it's inert but not
-deleted). Blizzard's own base-game archives are never shown or touched.
+deleted). Blizzard's own base-game archives are never shown or touched. Each patch shows its
+title/author/description/version/website when the archive itself carries a `Patch.toc` or
+readme-style file — an info button lets you fill in whatever wasn't found automatically — and the
+list is searchable by name.
 
 ### Addons
 
@@ -147,7 +152,7 @@ own code.
 
 ## Project status
 
-Version 2.0.0-beta.1. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
+Version 2.0.0-beta.2. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
 ## License

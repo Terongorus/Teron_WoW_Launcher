@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [2.0.0-beta.2] - 2026-07-20
+
+### Added
+
+- A Config.WTF toggle on the Tweaks tab forces the specific settings some HD/visual MPQ patches
+  (e.g. Project Reforged Kronos) need to render correctly, re-applied automatically at the start
+  of every launch since the game client can rewrite some of the same settings itself between
+  sessions. Only touches the handful of keys it needs — every other video setting is left exactly
+  as you set it.
+- Custom MPQ patches now show a real title, author, description, version, and website when
+  available, auto-extracted from a bundled `Patch.toc` or readme-style file inside the patch
+  itself. A new info button per patch lets you fill in whatever wasn't found automatically.
+- DLLs now support the same kind of info entry — many small hand-built mod DLLs carry no
+  version/author/description in the file itself, so a new info button per DLL lets you fill that
+  in by hand. Anything the DLL's own file already provides is shown read-only.
+- Search boxes added to the MPQ Patches and DLLs tabs (Addons already had one).
+
+### Changed
+
+- The Tweaks tab is now split into "Mandatory" and "Optional" sections. Mandatory (Signature
+  Removal, Large Address Aware, the Config.WTF toggle) is called out explicitly as what you need
+  enabled to safely run custom MPQ patches; everything else is optional quality-of-life/visual
+  tweaks that work with or without them.
+- The DLLs tab is restructured into a single list instead of two separate side-by-side panels —
+  every DLL sitting in the game folder shows up together, tracked ones grouped above detected
+  ones, each with its own track/untrack, ignore, and info buttons directly on the row instead of
+  needing to select an item first and click a separate toolbar button.
+- The launcher's own per-directory files (addon tracking, DLL/MPQ patch info, directory settings,
+  DLL load-order cache) now live inside a `.teronwow` subfolder in each WoW installation instead
+  of sitting loose alongside your actual game files.
+
+### Fixed
+
+- The launcher window no longer overhangs past the screen edge when maximized — content used to
+  read as pushed in a few pixels from every edge compared to the same window restored.
+- An addon with no version listed in its `.toc` now shows "v?" instead of a blank gap; an addon
+  whose `.toc` version already starts with "v" no longer shows a doubled "vv1.0.0".
+- Fixed a rare case where adding a new WoW installation could silently copy in another
+  installation's saved account/realmlist/tweaks instead of starting fresh, if an earlier internal
+  cleanup step failed without being noticed.
+- The launcher could potentially crash during Install if pointed at a folder already containing a
+  corrupted or locked `WoW.exe`.
+- Removing an addon (especially one tracked via GitHub) or clearing the WDB cache before launch no
+  longer freezes the launcher window while it works.
+
 ## [2.0.0-beta.1] - 2026-07-17
 
 ### Added
