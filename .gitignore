@@ -364,3 +364,7 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+.vscode/
+
+# BUILDER convention: consolidated build output tree (Directory.Build.props)
+/Build/

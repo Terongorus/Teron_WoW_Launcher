@@ -20,7 +20,7 @@
 #define MyAppName "Teron WoW Launcher"
 #define MyAppPublisher "Teronverse"
 #define MyAppExeName "TeronWoWLauncher.exe"
-#define MyPublishDir "..\bin\Publish\TeronWoWLauncher_Win_x86"
+#define MyPublishDir "..\Build\Publish\TeronWoWLauncher\win-x86"
 
 [Setup]
 AppId={{F8EDD851-8B53-4896-AF09-BDBE21CA8191}

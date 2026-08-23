@@ -7,6 +7,7 @@
     <AssemblyName>TeronWoWLauncher</AssemblyName>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
     <UseWPF>true</UseWPF>
 
     <!--
