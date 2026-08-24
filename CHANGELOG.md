@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [2.0.0-beta.3] - 2026-08-24
+
+### Added
+
+- **Client Identifiers**: a shared, editable table (Settings tab) of known clients — name,
+  download URL, and category (Vanilla or Vanilla+) — seeded with Kronos, TurtleWoW, and OctoWoW
+  defaults, replacing the old fixed three-way client-type choice and single global download URL.
+  Each profile picks one by reference, so several profiles can point at the same server without
+  re-entering its URL, and a custom/unknown Vanilla+ client is supported too (it just gets the
+  generic, byte-verified Vanilla+ baseline instead of a known seed's own extra-widened values).
+- TurtleWoW/OctoWoW tweaks that ship already baked into the client (Large Address Aware,
+  sound-in-background, auto-loot, the camera rotation glitch fix, widescreen FoV, nameplate
+  distance) are now genuinely togglable instead of read-only "already included" notes —
+  unchecking one actually reverts that byte range to Blizzard's original value on rebuild. They
+  default to checked the first time a profile's patches are configured, so an existing install
+  isn't silently reverted the moment this shipped.
+- Home tab redesigned around **Profiles**: a three-column layout (News/Changelog, a Profile list,
+  and that profile's settings) replaces the old two-column Realm/Login layout. A Profile bundles a
+  directory, name, realmlist, Client identifier, login delay, WDB cleanup, and login credentials —
+  add, rename, switch, and delete them entirely from Home, with every other tab (Tweaks, DLLs, MPQ
+  Patches, Addons) following whichever profile is active. Play/Install stays disabled, with an
+  inline explanation, until a profile has a Client identifier assigned.
+
+### Changed
+
+- Settings tab trimmed now that Home's Profile settings panel owns them: installation directory,
+  realmlist, the old singular client-profile selector, login delay, and the WDB cleanup toggle are
+  gone from Settings — only Client Identifiers (the shared table), Repair/Delete Game Files
+  (applying to whichever profile is active on Home), Config.WTF, Launcher window, and Ignored DLLs
+  remain.
+- "Client Profile(s)" was renamed to "Client Identifier(s)" throughout the UI to avoid clashing
+  with the new "Profile" (WoW directory/installation) concept — purely a naming change, no
+  behavior difference.
+- Vanilla+ (TurtleWoW/OctoWoW) tweaks now apply in the same fixed order as the plain Vanilla
+  catalog, instead of a different order that made the two catalogs' Tweaks-tab layouts inconsistent
+  with each other.
+- A profile with no Client identifier assigned shows an inline warning and a disabled Play/Install
+  button instead of a blocking pop-up dialog.
+
+### Fixed
+
+- A `PatchCatalog` static-initialization-order bug could throw a `NullReferenceException` on
+  startup (constant fingerprint fields were declared after the catalog fields that captured them).
+- Addon definitions from one WoW directory could incorrectly appear as tracked in another
+  directory's own addon list, if that other directory's addons.json had never been created yet
+  when a legacy global-addons migration ran — the migration now only adopts entries whose folders
+  actually exist on disk for the directory it's migrating into.
+- Selecting a Client identifier, or naming a profile, didn't show up in the Profile list, the
+  Tweaks tab, or the Play-button gate until several hundred milliseconds later (or, in the worst
+  case, only after restarting) — those all read a value that's only updated on the debounced
+  settings-save tick; they now read the live UI selection directly instead.
+- Applying a tweak against a profile whose Client identifier doesn't actually match its WoW.exe
+  (most commonly: the wrong identifier assigned to a directory) failed with the underlying error
+  only ever visible in the Log tab as a raw stack trace; it now surfaces as a toast naming the
+  mismatched identifier and pointing at Profile settings, instead of failing silently from the
+  user's point of view.
+- The Realmlist field (the one editable dropdown in the app) clipped its own text, because its
+  internal text box picked up the app-wide text box style's padding on top of the dropdown's own,
+  doubling the vertical inset.
+- The Profile list read as a wall of near-invisible text over the background art (fully transparent
+  row backgrounds); rows now sit inside a solid card with a solid per-row background.
+
 ## [2.0.0-beta.2] - 2026-07-20
 
 ### Added

@@ -11,13 +11,6 @@ public sealed class LauncherSettings
     /// <summary>WoW game directory (folder containing WoW.exe). Null/empty = none configured yet.</summary>
     public string? WowDirectory { get; set; }
 
-    /// <summary>
-    /// URL of the vanilla client ZIP to download. Null = use the built-in default. Global rather
-    /// than per-directory - normally the same source server/CDN regardless of which directory is
-    /// being set up.
-    /// </summary>
-    public string? ClientDownloadUrl { get; set; }
-
     /// <summary>Minimize the launcher window as soon as Play successfully starts the game.</summary>
     public bool MinimizeOnLaunch { get; set; }
 
@@ -42,6 +35,15 @@ public sealed class LauncherSettings
     /// <summary>Launcher version last shown via the "what's new" popup. Null on first run — no
     /// popup then, since there's nothing to compare against.</summary>
     public string? LastSeenVersion { get; set; }
+
+    /// <summary>
+    /// The global, shared table of known WoW servers/clients - a directory picks one by id
+    /// (<see cref="DirectorySettings.ClientProfileId"/>) instead of storing its own client type/URL.
+    /// Seeded once, on first run, with a few known-good defaults (see
+    /// MainWindow.SeedDefaultClientProfilesIfNeeded) if this list is still empty; the user can freely
+    /// add, edit, or delete rows afterward, including the seeded ones.
+    /// </summary>
+    public List<ClientProfile> ClientProfiles { get; set; } = new();
 
     // --- Window placement, restored on the next launch. Null = use the XAML defaults (first run,
     // or the saved position no longer falls on any connected monitor). Named to avoid colliding with

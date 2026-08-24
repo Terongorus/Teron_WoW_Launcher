@@ -43,7 +43,7 @@ public sealed class DirectorySettingsService
     {
         "InstalledClientSignature", "Account", "EncryptedPassword", "SavePassword", "AutoLoginEnabled",
         "LoginDelayMs", "Realmlist", "EnabledPatchIds", "PatchParameters", "AppliedPatchSignature",
-        "PristineBackupHash", "CleanWdbBeforeLaunch", "IgnoredDetectedDlls",
+        "PristineBackupHash", "CleanWdbBeforeLaunch", "IgnoredDetectedDlls", "ClientDownloadUrl",
     };
 
     private readonly Logger _log = Logger.Instance;

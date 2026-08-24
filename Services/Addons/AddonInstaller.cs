@@ -24,8 +24,16 @@ public sealed class AddonInstaller
 {
     private readonly Logger _log = Logger.Instance;
 
-    /// <summary>Install every addon found under a content directory; returns each installed folder with its .toc metadata.</summary>
-    public List<InstalledFolderInfo> InstallFromDirectory(string contentDir, string wowDir)
+    /// <summary>
+    /// Install every addon found under a content directory; returns each installed folder with its
+    /// .toc metadata. <paramref name="folderRenames"/> (an existing tracked addon's own
+    /// <see cref="Models.InstalledAddon.FolderRenames"/>, keyed by canonical/.toc-derived folder
+    /// name) redirects the destination folder name for a canonical name it contains, so a user
+    /// rename made via the UI survives this install/update instead of being overwritten back to the
+    /// canonical name.
+    /// </summary>
+    public List<InstalledFolderInfo> InstallFromDirectory(
+        string contentDir, string wowDir, IReadOnlyDictionary<string, string>? folderRenames = null)
     {
         List<(string Dir, string Name)> addons = FindAllTocDirs(contentDir);
         if (addons.Count == 0)
@@ -38,7 +46,11 @@ public sealed class AddonInstaller
         var installed = new List<InstalledFolderInfo>();
         foreach ((string dir, string name) in addons)
         {
-            string dest = Path.Combine(addonsDir, name);
+            string destName = folderRenames is not null && folderRenames.TryGetValue(name, out string? renamed)
+                ? renamed
+                : name;
+
+            string dest = Path.Combine(addonsDir, destName);
             if (Directory.Exists(dest))
             {
                 DirectoryHelper.DeleteRecursive(dest);
@@ -47,8 +59,8 @@ public sealed class AddonInstaller
             List<string> excludeDirs = addons.Where(a => !PathEquals(a.Dir, dir)).Select(a => a.Dir).ToList();
             CopyDirectory(dir, dest, excludeDirs);
             (string? title, string? version) = TocMetadataReader.Read(dest);
-            installed.Add(new InstalledFolderInfo(name, title, version));
-            _log.Info($"Installed addon: {name}");
+            installed.Add(new InstalledFolderInfo(destName, title, version, name));
+            _log.Info($"Installed addon: {destName}");
         }
 
         return installed;
@@ -134,6 +146,28 @@ public sealed class AddonInstaller
             }
 
             File.Copy(file, ResolveDestPath(source, file, destFull), overwrite: true);
+        }
+
+        RemoveEmptyDirectories(dest);
+    }
+
+    /// <summary>
+    /// Removes any directory left empty by the copy above. An ancestor of an excluded nested addon
+    /// module (e.g. a "mods" folder whose only children are separately-tracked modules) still gets
+    /// created by the directory pass, since only the excluded module itself is skipped there — with
+    /// every file under it excluded too, it ends up empty. Longest-path-first is a cheap stand-in
+    /// for deepest-first here, so a folder that's only empty once its own now-deleted child is
+    /// removed still gets caught in this same pass.
+    /// </summary>
+    private static void RemoveEmptyDirectories(string root)
+    {
+        foreach (string dir in Directory.GetDirectories(root, "*", SearchOption.AllDirectories)
+                     .OrderByDescending(d => d.Length))
+        {
+            if (Directory.Exists(dir) && Directory.GetFileSystemEntries(dir).Length == 0)
+            {
+                Directory.Delete(dir);
+            }
         }
     }
 

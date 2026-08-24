@@ -69,6 +69,8 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _settingsSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
     private readonly DispatcherTimer _realmStatusTimer = new() { Interval = TimeSpan.FromSeconds(60) };
     private readonly DispatcherTimer _gameRunningTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+    private readonly DispatcherTimer _addonFolderWatchTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    private FileSystemWatcher? _addonFolderWatcher;
     private int _realmStatusCheckInFlight;
     private bool _loading;
     private bool _applyingPatches;
@@ -177,7 +179,6 @@ public partial class MainWindow : Window
         IgnoredDllList.ItemsSource = _ignoredDllItems;
         LogList.ItemsSource = _logItems;
         RealmlistBox.ItemsSource = _realmlistHistoryItems;
-        DirectorySwitchBox.ItemsSource = _managedDirectoryItems;
 
         // Save on any change instead of a Save button — CollectSettingsFromUi() validates each field
         // (bad numbers/URLs keep the last good value) before anything is persisted.
@@ -188,13 +189,13 @@ public partial class MainWindow : Window
         SavePasswordCheck.Checked += (_, _) => ScheduleSettingsSave();
         SavePasswordCheck.Unchecked += (_, _) => ScheduleSettingsSave();
         GameFolderBox.TextChanged += (_, _) => ScheduleSettingsSave();
+        ProfileNameBox.TextChanged += (_, _) => { ScheduleSettingsSave(); BuildProfileList(); };
         // ComboBox has no TextChanged event of its own — IsEditable routes typed input through its
         // internal PART_EditableTextBox, whose TextChanged bubbles up as the TextBoxBase attached
         // event, which AddHandler picks up here the same way XAML's "TextBoxBase.TextChanged=..."
         // syntax would.
         RealmlistBox.AddHandler(TextBoxBase.TextChangedEvent, new TextChangedEventHandler((_, _) => ScheduleSettingsSave()));
         RealmlistBox.LostFocus += (_, _) => UpdateRealmlistLabel();
-        ClientUrlBox.TextChanged += (_, _) => ScheduleSettingsSave();
         DelayBox.TextChanged += (_, _) => ScheduleSettingsSave();
         CleanWdbCheck.Checked += (_, _) => ScheduleSettingsSave();
         CleanWdbCheck.Unchecked += (_, _) => ScheduleSettingsSave();
@@ -332,6 +333,9 @@ public partial class MainWindow : Window
 
         s.SavedWindowState = WindowState.ToString();
         _settings.Save();
+
+        _addonFolderWatchTimer.Stop();
+        _addonFolderWatcher?.Dispose();
     }
 
     // ---------------- Home tab: How to use (README/CHANGELOG from GitHub, rendered as Markdown) ----------------
@@ -434,21 +438,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnRealmlistLabelClicked(object sender, MouseButtonEventArgs e)
-    {
-        SelectTab(5); // Settings
-        RealmlistBox.Focus();
-
-        // ComboBox has no SelectAll() of its own; reach into its editable-mode template part instead.
-        RealmlistBox.ApplyTemplate();
-        if (RealmlistBox.Template.FindName("PART_EditableTextBox", RealmlistBox) is TextBox editableText)
-        {
-            editableText.SelectAll();
-        }
-
-        FlashHighlight(RealmlistBox);
-    }
-
     /// <summary>Briefly flashes a control's border gold then fades it back, to draw the eye to it.</summary>
     private static void FlashHighlight(Control control)
     {
@@ -467,13 +456,68 @@ public partial class MainWindow : Window
 
     // ---------------- Tweaks tab ----------------
 
+    /// <summary>
+    /// One-time, per-directory: pre-checks any patch marked <see cref="PatchDefinition.DefaultEnabled"/>
+    /// (currently the TurtleWoW/OctoWoW tweaks that already ship baked into those clients) so a fresh
+    /// directory's first patch sync is a no-op against what the client already ships, instead of
+    /// looking like an unrequested revert. Guarded by <see cref="DirectorySettings.PatchDefaultsSeeded"/>
+    /// so it never re-applies over a later, deliberate "everything off" choice.
+    /// </summary>
+    private void SeedDefaultPatchIdsIfNeeded(IReadOnlyList<PatchDefinition> catalog)
+    {
+        DirectorySettings ds = _dirSettings.Current;
+        if (ds.PatchDefaultsSeeded)
+        {
+            return;
+        }
+
+        bool changed = false;
+        foreach (PatchDefinition patch in catalog)
+        {
+            if (patch.DefaultEnabled && !ds.EnabledPatchIds.Contains(patch.Id))
+            {
+                ds.EnabledPatchIds.Add(patch.Id);
+                changed = true;
+            }
+        }
+
+        ds.PatchDefaultsSeeded = true;
+        if (changed && !_loading)
+        {
+            _dirSettings.Save(CurrentWowDir());
+        }
+    }
+
     private void BuildPatchList()
     {
         PatchesPanel.Children.Clear();
         MandatoryPatchesPanel.Children.Clear();
         _patchControls.Clear();
 
-        IReadOnlyList<PatchDefinition> catalog = PatchCatalog.All;
+        // CurrentClientIdentifierId() (live combo selection), not _dirSettings.Current.ClientProfileId -
+        // that field only updates on the 700ms debounced save tick (see ScheduleSettingsSave/
+        // PersistSettingsFromUiAsync), so reading it here showed a stale "no identifier assigned"
+        // message for up to 700ms right after picking one, including whenever OnClientIdentifierSelected
+        // calls this synchronously before the debounce has had a chance to fire.
+        ClientProfile? profile = ResolveClientProfile(CurrentClientIdentifierId());
+        if (profile is null)
+        {
+            // Same condition the Home tab's Client identifier warning + Play/Install button gating
+            // already surface (see RefreshClientIdentifierWarning/UpdatePlayButtonEnabled) - this is
+            // just the Tweaks tab's own reflection of it, no separate interruption needed here.
+            PatchesPanel.Children.Add(new TextBlock
+            {
+                Text = "No client identifier assigned to this profile — pick one in Profile settings on Home.",
+                Foreground = MutedBrush,
+                FontSize = BodyFontSize,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            RefreshSignatureMpqWarning();
+            return;
+        }
+
+        IReadOnlyList<PatchDefinition> catalog = PatchCatalog.For(profile.Category, profile.Id);
+        SeedDefaultPatchIdsIfNeeded(catalog);
 
         foreach (PatchDefinition patch in catalog)
         {
@@ -1374,6 +1418,114 @@ public partial class MainWindow : Window
         CollectionViewSource.GetDefaultView(_addonItems).Filter = FilterAddonRow;
         RefreshAddonList();
         UpdateAddonSearchPlaceholder();
+
+        _addonFolderWatchTimer.Tick += OnAddonFolderWatchTimerTick;
+        StartAddonFolderWatcher(CurrentWowDir());
+    }
+
+    /// <summary>
+    /// Watches the currently-selected installation's Interface\AddOns folder for folders appearing/
+    /// disappearing on disk (added/removed by hand, or by something other than this launcher), so the
+    /// Addons tab can pick that up live instead of only on the next manual Refresh. Re-created every
+    /// time the selected directory changes (see <see cref="PersistSettingsFromUiAsync"/>) - a stale
+    /// watcher left pointed at a directory the user has since moved/deleted away from would otherwise
+    /// keep a handle open on it and never fire for the newly-selected one.
+    /// </summary>
+    private void StartAddonFolderWatcher(string wowDir)
+    {
+        _addonFolderWatcher?.Dispose();
+        _addonFolderWatcher = null;
+
+        string addonsDir = AddonPaths.AddOnsDir(wowDir);
+        if (!Directory.Exists(addonsDir))
+        {
+            return;
+        }
+
+        try
+        {
+            var watcher = new FileSystemWatcher(addonsDir)
+            {
+                NotifyFilter = NotifyFilters.DirectoryName,
+                IncludeSubdirectories = false,
+            };
+
+            // Raised on a background thread — only ever touches the DispatcherTimer's Start/Stop,
+            // which are themselves safe to call off the UI thread, so no explicit Dispatcher hop is
+            // needed here; the timer's own Tick still runs on the UI thread as usual.
+            watcher.Created += (_, _) => ScheduleAddonFolderRescan();
+            watcher.Deleted += (_, _) => ScheduleAddonFolderRescan();
+            watcher.Renamed += (_, _) => ScheduleAddonFolderRescan();
+            watcher.EnableRaisingEvents = true;
+
+            _addonFolderWatcher = watcher;
+        }
+        catch (Exception ex)
+        {
+            // Best-effort - the manual Refresh button still works if the watcher itself can't be
+            // created (e.g. a transient permissions/handle issue), so this degrades quietly.
+            _log.Warn($"Could not watch {addonsDir} for addon folder changes: {ex.Message}");
+        }
+    }
+
+    // Restarts the debounce window on every raw event - a folder copy fires many Created events in
+    // quick succession, and this waits for them to go quiet before actually rescanning once.
+    private void ScheduleAddonFolderRescan()
+    {
+        _addonFolderWatchTimer.Stop();
+        _addonFolderWatchTimer.Start();
+    }
+
+    private async void OnAddonFolderWatchTimerTick(object? sender, EventArgs e)
+    {
+        _addonFolderWatchTimer.Stop();
+        await RefreshAddonsLocalOnlyAsync();
+    }
+
+    /// <summary>
+    /// The local-only half of <see cref="RefreshAddonsAsync"/>: re-reads on-disk .toc metadata and
+    /// adopts/merges untracked folders, but deliberately skips <see cref="AddonLibrary
+    /// .CheckForUpdatesAsync"/> - a local file-system change should never trigger a GitHub round-trip
+    /// on its own. The manual Refresh button still runs the full flow, including update checks.
+    /// </summary>
+    private async Task RefreshAddonsLocalOnlyAsync()
+    {
+        if (_addonBusy)
+        {
+            return;
+        }
+
+        _addonBusy = true;
+        try
+        {
+            string wowDir = CurrentWowDir();
+            _addons.RefreshMetadataFromDisk(wowDir);
+
+            AddonLibrary.LocalAddonSyncResult sync = _addons.SyncLocalAddons(wowDir);
+            if (sync.Conflicts.Count > 0)
+            {
+                var dialog = new LocalAddonsDialog(sync.Conflicts);
+                if (ShowModal(dialog) == true)
+                {
+                    foreach (LocalAddonCandidate candidate in dialog.Selected)
+                    {
+                        _addons.Adopt(candidate, wowDir);
+                    }
+                }
+            }
+
+            RefreshAddonList();
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Local addon folder rescan failed.", ex);
+        }
+        finally
+        {
+            _addonBusy = false;
+        }
+
+        await Task.CompletedTask;
     }
 
     private bool FilterAddonRow(object item)
@@ -1483,6 +1635,41 @@ public partial class MainWindow : Window
             await _addons.RemoveAsync(addon, CurrentWowDir());
             RefreshAddonList();
             ShowToast("Addons", $"Removed {WowColorTextParser.StripCodes(addon.Name)}.", ToastSeverity.Success);
+        }
+    }
+
+    private void OnRenameAddonFolderClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: InstalledAddon addon } || addon.Folders.Count == 0)
+        {
+            return;
+        }
+
+        var dialog = new RenameAddonFolderDialog(addon.Folders);
+        if (ShowModal(dialog) != true)
+        {
+            return;
+        }
+
+        string oldFolder = dialog.SelectedFolder;
+        string newName = dialog.NewName;
+        AddonLibrary.RenameFolderOutcome outcome = _addons.RenameFolder(addon, oldFolder, newName, CurrentWowDir());
+
+        switch (outcome)
+        {
+            case AddonLibrary.RenameFolderOutcome.Success:
+                RefreshAddonList();
+                ShowToast("Addons", $"Renamed '{oldFolder}' to '{newName}'.", ToastSeverity.Success);
+                break;
+            case AddonLibrary.RenameFolderOutcome.Collision:
+                ShowToast("Addons", $"A folder named '{newName}' already exists.", ToastSeverity.Error);
+                break;
+            case AddonLibrary.RenameFolderOutcome.InvalidName:
+                ShowToast("Addons", "Enter a valid folder name.", ToastSeverity.Error);
+                break;
+            case AddonLibrary.RenameFolderOutcome.MoveFailed:
+                ShowToast("Addons", $"Could not rename '{oldFolder}' — check the Log tab for details.", ToastSeverity.Error);
+                break;
         }
     }
 
@@ -1623,12 +1810,14 @@ public partial class MainWindow : Window
             await _addons.CheckForUpdatesAsync(wowDir);
 
             RefreshAddonList();
-            ShowToast("Addons", 
-                sync.AutoAdopted > 0
-                    ? $"Refreshed. {sync.AutoAdopted} local addon(s) added automatically."
-                    : "Refreshed.",
-                ToastSeverity.Success,
-                updateKey: "addon-refresh");
+            string syncSuffix = (sync.AutoAdopted, sync.Merged) switch
+            {
+                (0, 0) => string.Empty,
+                (var a, 0) => $" {a} local addon(s) added automatically.",
+                (0, var m) => $" {m} local folder(s) merged into existing addons.",
+                (var a, var m) => $" {a} local addon(s) added, {m} folder(s) merged.",
+            };
+            ShowToast("Addons", $"Refreshed.{syncSuffix}", ToastSeverity.Success, updateKey: "addon-refresh");
         }
         catch (Exception ex)
         {
@@ -2136,12 +2325,222 @@ public partial class MainWindow : Window
         MinimizeOnLaunchCheck.IsChecked = s.MinimizeOnLaunch;
         RefreshRealmlistHistoryItems();
         RefreshManagedDirectoryItems();
-        ClientUrlBox.Text = string.IsNullOrWhiteSpace(s.ClientDownloadUrl)
-            ? GameInstallService.DefaultClientUrl
-            : s.ClientDownloadUrl;
+
+        SeedDefaultClientProfilesIfNeeded();
+        BuildClientProfileList();
+        RefreshClientIdentifierCombo();
 
         UpdateGameFolderHint();
     }
+
+    // ---------------- Client Identifiers (global table of known servers/clients) ----------------
+
+    /// <summary>
+    /// One-time, global: if the profile table has never been touched (empty), seed it with a few
+    /// known-good starting points so a fresh install isn't staring at an empty table. Kronos and
+    /// Twinstar serve the same vanilla 1.12.1 zip (only their realmlist differs), so the Kronos seed
+    /// reuses that same confirmed-working URL. TurtleWoW's own server has shut down (no fresh download
+    /// exists), but its byte-verified baseline is still worth offering for an already-installed copy.
+    /// Never re-seeds afterward - the user can freely edit/delete any of these, including all three.
+    /// </summary>
+    private void SeedDefaultClientProfilesIfNeeded()
+    {
+        if (_settings.Current.ClientProfiles.Count > 0)
+        {
+            return;
+        }
+
+        _settings.Current.ClientProfiles.Add(new ClientProfile
+        {
+            Id = ClientProfile.KronosSeedId,
+            Name = "Kronos WoW",
+            DownloadUrl = GameInstallService.DefaultClientUrl,
+            Category = ClientCategory.Vanilla,
+        });
+        _settings.Current.ClientProfiles.Add(new ClientProfile
+        {
+            Id = ClientProfile.OctoWowSeedId,
+            Name = "OctoWoW",
+            DownloadUrl = GameInstallService.DefaultOctoWowClientUrl,
+            Category = ClientCategory.VanillaPlus,
+        });
+        _settings.Current.ClientProfiles.Add(new ClientProfile
+        {
+            Id = ClientProfile.TurtleWowSeedId,
+            Name = "Turtle WoW",
+            DownloadUrl = GameInstallService.DefaultTurtleWowClientUrl,
+            Category = ClientCategory.VanillaPlus,
+        });
+        _settings.Save();
+    }
+
+    /// <summary>Rebuilds the global Client Identifiers table (Settings tab) from
+    /// <see cref="LauncherSettings.ClientProfiles"/> - one editable row per profile, plus an Add
+    /// button already in XAML. Each row's controls write straight back into the same ClientProfile
+    /// instance (reference type, shared with the list), so no separate collect step is needed for
+    /// this table - which profile a directory uses is picked in ProfileDialog instead.</summary>
+    private void BuildClientProfileList()
+    {
+        ClientProfilesPanel.Children.Clear();
+
+        foreach (ClientProfile profile in _settings.Current.ClientProfiles)
+        {
+            var row = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var nameBox = new TextBox { Text = profile.Name, Margin = new Thickness(0, 0, 6, 0) };
+            nameBox.LostFocus += (_, _) =>
+            {
+                string trimmed = nameBox.Text.Trim();
+                if (trimmed.Length > 0 && trimmed != profile.Name)
+                {
+                    profile.Name = trimmed;
+                    _settings.Save();
+                    RefreshClientIdentifierCombo();
+                }
+                else
+                {
+                    nameBox.Text = profile.Name;
+                }
+            };
+            Grid.SetColumn(nameBox, 0);
+            row.Children.Add(nameBox);
+
+            var categoryCombo = new ComboBox { Margin = new Thickness(0, 0, 6, 0) };
+            categoryCombo.Items.Add(new ComboBoxItem { Content = "Vanilla", Tag = ClientCategory.Vanilla });
+            categoryCombo.Items.Add(new ComboBoxItem { Content = "Vanilla+", Tag = ClientCategory.VanillaPlus });
+            categoryCombo.SelectedIndex = profile.Category == ClientCategory.VanillaPlus ? 1 : 0;
+            categoryCombo.SelectionChanged += (_, _) =>
+            {
+                if (categoryCombo.SelectedItem is ComboBoxItem { Tag: ClientCategory selected })
+                {
+                    profile.Category = selected;
+                    _settings.Save();
+                    // The currently-viewed directory's Tweaks tab depends on category when it's the
+                    // one using this exact profile - refresh so an edit here is reflected immediately.
+                    BuildPatchList();
+                }
+            };
+            Grid.SetColumn(categoryCombo, 1);
+            row.Children.Add(categoryCombo);
+
+            var urlBox = new TextBox
+            {
+                Text = profile.DownloadUrl ?? string.Empty,
+                Margin = new Thickness(0, 0, 6, 0),
+                ToolTip = "Leave empty if this server has no downloadable client (e.g. an already-installed copy).",
+            };
+            urlBox.LostFocus += (_, _) =>
+            {
+                string trimmed = urlBox.Text.Trim();
+                profile.DownloadUrl = trimmed.Length == 0 ? null : trimmed;
+                _settings.Save();
+            };
+            Grid.SetColumn(urlBox, 2);
+            row.Children.Add(urlBox);
+
+            var deleteButton = new Button
+            {
+                Content = "Delete",
+                Background = (Brush)FindResource("RemoveActionBrush"),
+            };
+            deleteButton.Click += (_, _) =>
+            {
+                _settings.Current.ClientProfiles.Remove(profile);
+                _settings.Save();
+                BuildClientProfileList();
+                RefreshClientIdentifierCombo();
+                // A directory that was pointing at the now-deleted profile becomes unassigned again -
+                // reflected immediately by re-resolving the combo/patch list for whichever directory
+                // is currently shown, same as any other profile change above.
+                SetClientIdentifierCombo(_dirSettings.Current.ClientProfileId);
+                BuildPatchList();
+            };
+            Grid.SetColumn(deleteButton, 3);
+            row.Children.Add(deleteButton);
+
+            ClientProfilesPanel.Children.Add(row);
+        }
+    }
+
+    private void OnAddClientProfile(object sender, RoutedEventArgs e)
+    {
+        _settings.Current.ClientProfiles.Add(new ClientProfile
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = "New Profile",
+            DownloadUrl = null,
+            Category = ClientCategory.Vanilla,
+        });
+        _settings.Save();
+        BuildClientProfileList();
+        RefreshClientIdentifierCombo();
+    }
+
+    /// <summary>Repopulates ClientIdentifierCombo (Home, Profile settings) from the current global
+    /// list, preserving whichever profile is currently selected if it still exists. Display text is
+    /// "Name (Category)" per-item, so the category is visible without needing the global table open.</summary>
+    private void RefreshClientIdentifierCombo()
+    {
+        string? currentId = CurrentClientIdentifierId();
+        ClientIdentifierCombo.Items.Clear();
+        foreach (ClientProfile profile in _settings.Current.ClientProfiles)
+        {
+            string category = profile.Category == ClientCategory.VanillaPlus ? "Vanilla+" : "Vanilla";
+            ClientIdentifierCombo.Items.Add(new ComboBoxItem { Content = $"{profile.Name} ({category})", Tag = profile.Id });
+        }
+
+        SetClientIdentifierCombo(currentId);
+    }
+
+    private void OnClientIdentifierSelected(object sender, SelectionChangedEventArgs e)
+    {
+        RefreshClientIdentifierWarning();
+        if (_loading)
+        {
+            return;
+        }
+
+        BuildPatchList();
+        UpdatePlayButtonEnabled(); // Play/Install may need to (un)gate on client-identifier presence.
+        ScheduleSettingsSave();
+    }
+
+    private string? CurrentClientIdentifierId()
+        => ClientIdentifierCombo.SelectedItem is ComboBoxItem { Tag: string tag } ? tag : null;
+
+    private void SetClientIdentifierCombo(string? profileId)
+    {
+        foreach (ComboBoxItem item in ClientIdentifierCombo.Items.OfType<ComboBoxItem>())
+        {
+            if (item.Tag is string tag && tag == profileId)
+            {
+                ClientIdentifierCombo.SelectedItem = item;
+                RefreshClientIdentifierWarning();
+                return;
+            }
+        }
+
+        ClientIdentifierCombo.SelectedItem = null;
+        RefreshClientIdentifierWarning();
+    }
+
+    /// <summary>Shows the "pick a client identifier" warning under the combo whenever nothing's
+    /// selected - the Play/Install button is separately force-disabled for the same reason
+    /// (see UpdatePlayButtonEnabled), so this is the visible explanation for why.</summary>
+    private void RefreshClientIdentifierWarning()
+    {
+        ClientIdentifierWarningText.Visibility =
+            CurrentClientIdentifierId() is null ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private ClientProfile? ResolveClientProfile(string? profileId)
+        => profileId is null
+            ? null
+            : _settings.Current.ClientProfiles.FirstOrDefault(p => p.Id == profileId);
 
     /// <summary>
     /// The most-recently-used OTHER managed directory that still exists on disk, or null if the
@@ -2182,8 +2581,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Prunes any managed directory that no longer exists on disk (moved/deleted folder),
-    /// then repopulates the dropdown and highlights whichever entry matches the directory currently
-    /// in use, if any.</summary>
+    /// then repopulates <see cref="_managedDirectoryItems"/> and rebuilds the Profile list to match.</summary>
     private void RefreshManagedDirectoryItems()
     {
         List<string> dirs = _settings.Current.ManagedDirectories;
@@ -2199,21 +2597,164 @@ public partial class MainWindow : Window
             _managedDirectoryItems.Add(d);
         }
 
-        string current = CurrentWowDir();
-        DirectorySwitchBox.SelectedItem = _managedDirectoryItems.FirstOrDefault(
-            d => string.Equals(d, current, StringComparison.OrdinalIgnoreCase));
+        BuildProfileList();
     }
 
-    private void OnManagedDirectorySelected(object sender, SelectionChangedEventArgs e)
+    /// <summary>
+    /// Resolves what a profile row should actually show: its own <see cref="DirectorySettings.Name"/>
+    /// if one was set, otherwise the directory path - except for the launcher's own root folder (the
+    /// directory a freshly-added profile defaults to, see OnAddProfile), which falls back to "Default"
+    /// instead of an unhelpful raw path. Reads the CURRENTLY ACTIVE directory's name straight out of
+    /// ProfileNameBox itself, not _dirSettings.Current.Name - that field only updates on the 700ms
+    /// debounced save tick (see ScheduleSettingsSave/PersistSettingsFromUiAsync), so reading it here
+    /// would show a stale name until the debounce fires or the app restarts. Every other directory's
+    /// name is read fresh off its own settings file, since only the active one has live UI to read from.
+    /// </summary>
+    private string GetProfileDisplayName(string dir)
     {
-        if (DirectorySwitchBox.SelectedItem is string selected && !_loading &&
-            !string.Equals(selected, GameFolderBox.Text.Trim(), StringComparison.OrdinalIgnoreCase))
+        string? name = string.Equals(dir, CurrentWowDir(), StringComparison.OrdinalIgnoreCase)
+            ? ProfileNameBox.Text
+            : new DirectorySettingsService().Load(dir).Name;
+
+        if (!string.IsNullOrWhiteSpace(name))
         {
-            // Setting .Text fires TextChanged, which schedules the same auto-save/refresh pipeline
-            // (ForceStopClientDownloadForDirectoryChange, directory-settings reload, tab rescans) any
-            // other way of switching directories already goes through.
-            GameFolderBox.Text = selected;
+            return name.Trim();
         }
+
+        string baseDir = AppContext.BaseDirectory.TrimEnd('\\', '/');
+        return string.Equals(dir, baseDir, StringComparison.OrdinalIgnoreCase) ? "Default" : dir;
+    }
+
+    /// <summary>
+    /// Rebuilds the Home "Profiles" list (<see cref="ManagedDirectories"/>, one row per directory) -
+    /// clicking a row's directory text switches to it (same mechanism the old DirectorySwitchBox
+    /// selection used: setting GameFolderBox.Text fires the existing TextChanged → ScheduleSettingsSave
+    /// → PersistSettingsFromUiAsync wowDirChanged pipeline), a small delete button untracks it (not a
+    /// destructive file-system action - see OnRemoveProfile). The row matching CurrentWowDir() is
+    /// visually highlighted so it's clear which profile is active.
+    /// </summary>
+    private void BuildProfileList()
+    {
+        ProfileListPanel.Children.Clear();
+        string current = CurrentWowDir();
+
+        if (_managedDirectoryItems.Count == 0)
+        {
+            ProfileListPanel.Children.Add(new TextBlock
+            {
+                Text = "No profiles yet — click Add Profile below to get started.",
+                Foreground = MutedBrush,
+                FontSize = BodyFontSize,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        foreach (string dir in _managedDirectoryItems)
+        {
+            bool isActive = string.Equals(dir, current, StringComparison.OrdinalIgnoreCase);
+
+            var row = new Border
+            {
+                BorderThickness = new Thickness(1),
+                BorderBrush = isActive
+                    ? (Brush)FindResource("InstallActionBrush")
+                    : new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)),
+                // Solid background even when inactive - a fully transparent row was unreadable
+                // against the faint background art showing through the card behind it.
+                Background = isActive
+                    ? new SolidColorBrush(Color.FromArgb(0x33, 0xE6, 0xC0, 0x67))
+                    : new SolidColorBrush(Color.FromRgb(0x23, 0x23, 0x29)),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(10, 8, 6, 8),
+                Margin = new Thickness(0, 0, 0, 6),
+                Cursor = Cursors.Hand,
+            };
+
+            var rowGrid = new Grid();
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var dirText = new TextBlock
+            {
+                Text = GetProfileDisplayName(dir),
+                TextWrapping = TextWrapping.Wrap,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontWeight = isActive ? FontWeights.Bold : FontWeights.Normal,
+                ToolTip = dir,
+            };
+            Grid.SetColumn(dirText, 0);
+            rowGrid.Children.Add(dirText);
+
+            var deleteButton = new Button
+            {
+                Style = (Style)FindResource("GhostIconButtonStyle"),
+                Content = "",
+                ToolTip = "Remove this profile (untracks the directory only - files on disk are untouched)",
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            deleteButton.Click += (_, e) =>
+            {
+                e.Handled = true; // don't also trigger the row's own MouseLeftButtonUp switch-to below
+                OnRemoveProfile(dir);
+            };
+            Grid.SetColumn(deleteButton, 1);
+            rowGrid.Children.Add(deleteButton);
+
+            row.Child = rowGrid;
+            row.MouseLeftButtonUp += (_, _) => OnSelectProfile(dir);
+
+            ProfileListPanel.Children.Add(row);
+        }
+    }
+
+    /// <summary>Switches to a profile the same way the old DirectorySwitchBox selection did - setting
+    /// GameFolderBox.Text fires TextChanged → ScheduleSettingsSave → PersistSettingsFromUiAsync's
+    /// wowDirChanged branch, which reloads every directory-scoped tab.</summary>
+    private void OnSelectProfile(string dir)
+    {
+        if (!_loading && !string.Equals(dir, GameFolderBox.Text.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            GameFolderBox.Text = dir;
+        }
+    }
+
+    /// <summary>Untracks a profile from the list. Does not touch anything on disk - "Delete Game
+    /// Files" (Settings) is the destructive action for that. Falls back to another managed directory
+    /// if the removed one was active, same as the dead-directory fallback at startup.</summary>
+    private void OnRemoveProfile(string dir)
+    {
+        _settings.Current.ManagedDirectories.RemoveAll(d => string.Equals(d, dir, StringComparison.OrdinalIgnoreCase));
+        _settings.Save();
+
+        bool wasActive = string.Equals(dir, CurrentWowDir(), StringComparison.OrdinalIgnoreCase);
+        RefreshManagedDirectoryItems(); // also rebuilds the list
+
+        if (wasActive)
+        {
+            string? fallback = _settings.Current.ManagedDirectories.FirstOrDefault(Directory.Exists);
+            GameFolderBox.Text = fallback ?? string.Empty;
+        }
+    }
+
+    private void OnAddProfile(object sender, RoutedEventArgs e)
+    {
+        // Defaults to the launcher's own folder rather than leaving the field empty - a fresh
+        // profile still needs SOME directory to exist for DirectorySettingsService to key off of,
+        // and the user can immediately Browse elsewhere if this isn't where they want the client.
+        string defaultDir = AppContext.BaseDirectory.TrimEnd('\\', '/');
+        string dir = _settings.Current.ManagedDirectories.FirstOrDefault(
+            d => string.Equals(d, defaultDir, StringComparison.OrdinalIgnoreCase)) ?? defaultDir;
+
+        RecordManagedDirectory(dir);
+        GameFolderBox.Text = dir; // triggers the existing directory-switch pipeline if it's a real change
+        if (string.Equals(dir, CurrentWowDir(), StringComparison.OrdinalIgnoreCase))
+        {
+            // Already the active directory (re-adding a profile that's already selected) - the
+            // .Text setter above won't have fired TextChanged, so nothing else will refresh the UI.
+            BuildProfileList();
+        }
+
+        FlashHighlight(GameFolderBox);
     }
 
     /// <summary>Populates every UI field scoped to the currently-selected WoW directory (account,
@@ -2223,6 +2764,7 @@ public partial class MainWindow : Window
     private void LoadDirectorySettingsIntoUi()
     {
         DirectorySettings s = _dirSettings.Current;
+        ProfileNameBox.Text = s.Name ?? string.Empty;
         AutoLoginCheck.IsChecked = s.AutoLoginEnabled;
         AccountBox.Text = s.Account;
         SavePasswordCheck.IsChecked = s.SavePassword;
@@ -2231,6 +2773,7 @@ public partial class MainWindow : Window
         CleanWdbCheck.IsChecked = s.CleanWdbBeforeLaunch;
         ConfigWtfCheck.IsChecked = s.ConfigWtfRewriteEnabled;
         RealmlistBox.Text = s.Realmlist;
+        SetClientIdentifierCombo(s.ClientProfileId);
 
         BuildPatchList();
 
@@ -2243,20 +2786,10 @@ public partial class MainWindow : Window
         s.WowDirectory = string.IsNullOrWhiteSpace(GameFolderBox.Text) ? null : GameFolderBox.Text.Trim();
         s.MinimizeOnLaunch = MinimizeOnLaunchCheck.IsChecked == true;
 
-        // Only accept a well-formed absolute http(s) URL; otherwise keep whatever was last valid
-        // (a URL drives an actual HTTP request, so a malformed one must never silently take effect).
-        string url = ClientUrlBox.Text?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(url) || url == GameInstallService.DefaultClientUrl)
-        {
-            s.ClientDownloadUrl = null;
-        }
-        else if (Uri.TryCreate(url, UriKind.Absolute, out Uri? parsedUrl) &&
-                 (parsedUrl.Scheme == Uri.UriSchemeHttp || parsedUrl.Scheme == Uri.UriSchemeHttps))
-        {
-            s.ClientDownloadUrl = url;
-        }
-
         DirectorySettings ds = _dirSettings.Current;
+        ds.Name = string.IsNullOrWhiteSpace(ProfileNameBox.Text) ? null : ProfileNameBox.Text.Trim();
+        ds.ClientProfileId = CurrentClientIdentifierId();
+
         ds.AutoLoginEnabled = AutoLoginCheck.IsChecked == true;
         ds.Account = AccountBox.Text.Trim();
         ds.SavePassword = SavePasswordCheck.IsChecked == true;
@@ -2362,7 +2895,7 @@ public partial class MainWindow : Window
             _loading = true;
             LoadDirectorySettingsIntoUi();
             _loading = false;
-            RecordManagedDirectory(wowDir);
+            RecordManagedDirectory(wowDir); // re-highlights the now-active row via RefreshManagedDirectoryItems
 
             RefreshDllList();
             RefreshDetectedDlls();
@@ -2373,6 +2906,7 @@ public partial class MainWindow : Window
             // has to run before RefreshAddonList can show anything real for the newly-selected one.
             _addons.Load(wowDir);
             RefreshAddonList();
+            StartAddonFolderWatcher(wowDir);
 
             ShowToast("Launcher", $"Switched to '{wowDir}'.", ToastSeverity.Success);
         }
@@ -2470,19 +3004,9 @@ public partial class MainWindow : Window
             : _settings.ResolveWowDirectory();
 
     private string CurrentClientUrl()
-    {
-        string url = ClientUrlBox.Text?.Trim() ?? string.Empty;
-        return string.IsNullOrWhiteSpace(url) ? GameInstallService.DefaultClientUrl : url;
-    }
+        => ResolveClientProfile(CurrentClientIdentifierId())?.DownloadUrl ?? string.Empty;
 
-    private void UpdateRealmlistLabel()
-    {
-        string realm = RealmlistBox.Text?.Trim() ?? string.Empty;
-        // No "Realmlist:" prefix here - the "Realm" header above this row already provides that
-        // context, so the label itself only needs the value (or a placeholder for none set).
-        RealmlistLabel.Text = string.IsNullOrEmpty(realm) ? "(not set)" : realm;
-        _ = RefreshRealmStatusAsync();
-    }
+    private void UpdateRealmlistLabel() => _ = RefreshRealmStatusAsync();
 
     private async void OnRealmStatusTick(object? sender, EventArgs e)
     {
@@ -3037,10 +3561,17 @@ public partial class MainWindow : Window
 
     private void UpdatePlayButtonEnabled()
     {
-        PlayButton.IsEnabled = !_launchOperationBusy && !_wowAlreadyRunning;
+        // Installing needs a client identifier to know the download URL/patch catalog - gated here
+        // (rather than only warning) so there's no way to kick off an install that would immediately
+        // fail. Play/Update aren't gated the same way - RunPlayFlowAsync has its own check for the
+        // already-installed-but-identifier-since-deleted edge case this can't see.
+        bool needsClientIdentifier = _playState == PlayButtonState.Install && CurrentClientIdentifierId() is null;
+        PlayButton.IsEnabled = !_launchOperationBusy && !_wowAlreadyRunning && !needsClientIdentifier;
         PlayButton.ToolTip = _wowAlreadyRunning
             ? "WoW is already running from this game folder — close it first."
-            : null;
+            : needsClientIdentifier
+                ? "Pick a client identifier in Profile settings before installing."
+                : null;
         UpdatePlayButtonAppearance();
     }
 
@@ -3053,7 +3584,7 @@ public partial class MainWindow : Window
             PlayButtonState.Update => "UPDATE",
             _ => "PLAY",
         };
-        UpdatePlayButtonAppearance();
+        UpdatePlayButtonEnabled(); // re-evaluates the Install-state client-identifier gate above too
     }
 
     /// <summary>
@@ -3121,15 +3652,24 @@ public partial class MainWindow : Window
 
         string targetDir = dialog.SelectedFolder;
 
-        // An existing, verified 1.12.1 client already sitting in the chosen folder gets adopted as-is
+        // An existing, verified client already sitting in the chosen folder gets adopted as-is
         // instead of blindly re-downloaded over - the user pointing the launcher at a folder that
-        // already has a valid client should verify it, not clobber it.
-        bool alreadyValid = _install.IsInstalled(targetDir) && _install.IsUpToDate(targetDir);
+        // already has a valid client should verify it, not clobber it. Peeked directly rather than
+        // through _dirSettings (which still holds whichever directory was selected before this one
+        // until the full Load(targetDir) further below) so the right profile's check applies even on
+        // the very first look at a freshly-adopted folder. A folder with no profile assigned yet
+        // (brand new, or never configured through this launcher) has no category to check the version
+        // against - IsInstalled alone decides "already valid" there; the Client identifier warning +
+        // Play/Install gating (via LoadDirectorySettingsIntoUi's chain) prompts for one afterward either way.
+        string? targetProfileId = new DirectorySettingsService().Load(targetDir).ClientProfileId;
+        ClientProfile? targetProfile = _settings.Current.ClientProfiles.FirstOrDefault(p => p.Id == targetProfileId);
+        bool alreadyValid = _install.IsInstalled(targetDir) &&
+            (targetProfile is null || _install.IsUpToDate(targetDir, targetProfile.Category));
         bool ok;
         if (alreadyValid)
         {
             ok = true;
-            ShowToast("Launcher", "Existing 1.12.1 client verified — using it as-is.", ToastSeverity.Success);
+            ShowToast("Launcher", "Existing client verified — using it as-is.", ToastSeverity.Success);
         }
         else
         {
@@ -3160,7 +3700,7 @@ public partial class MainWindow : Window
             _dllMetadata.Load(targetDir);
             LoadDirectorySettingsIntoUi();
             _loading = false;
-            RecordManagedDirectory(targetDir);
+            RecordManagedDirectory(targetDir); // re-highlights the now-active row via RefreshManagedDirectoryItems
             RefreshDllList();
             RefreshDetectedDlls();
             RefreshIgnoredDllList();
@@ -3168,6 +3708,7 @@ public partial class MainWindow : Window
             _ = RunRetroactiveMpqExtractionAsync();
             _addons.Load(targetDir);
             RefreshAddonList();
+            StartAddonFolderWatcher(targetDir);
 
             // Only needed for the adopt path - RunClientDownloadAsync (the download path, above)
             // already refreshes the Play button state itself on success, so calling it
@@ -3635,6 +4176,20 @@ public partial class MainWindow : Window
             _wowAlreadyRunning = true;
             UpdatePlayButtonEnabled();
             ShowToast("Launcher", "WoW is already running from this game folder — close it first.", ToastSeverity.Warning);
+            return;
+        }
+
+        // The Install-state Play button is already force-disabled without a client identifier (see
+        // UpdatePlayButtonEnabled), but an already-installed directory whose assigned identifier was
+        // since deleted from the Client Identifiers table isn't caught by that gate (it's in Play/
+        // Update state, not Install) - covered here instead of a modal, matching the same inline
+        // warning already shown in Profile settings.
+        // CurrentClientIdentifierId(), not _dirSettings.Current.ClientProfileId - same staleness gap as
+        // BuildPatchList (see its own comment): this field only updates on the debounced save tick, so
+        // reading it here right after picking an identifier could incorrectly block a legitimate Play.
+        if (ResolveClientProfile(CurrentClientIdentifierId()) is null)
+        {
+            ShowToast("Launcher", "No client identifier assigned to this profile — pick one in Profile settings.", ToastSeverity.Warning);
             return;
         }
 

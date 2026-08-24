@@ -23,14 +23,42 @@
     <Product>Teron WoW Launcher (TWL)</Product>
     <Company>Teronverse</Company>
     <Authors>Kaloyan Kolev</Authors>
-    <Version>2.0.0-beta.2</Version>
-    <!-- Keep AssemblyInformationalVersion clean ("2.0.0-beta.2", not "2.0.0-beta.2+<gitsha>"). -->
+    <Version>2.0.0-beta.3</Version>
+    <!-- Keep AssemblyInformationalVersion clean ("2.0.0-beta.3", not "2.0.0-beta.3+<gitsha>"). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 
     <!-- Shown in Explorer/taskbar/Alt+Tab (and used as MainWindow's own icon below, since the
          custom title bar has no native caption icon slot to pick it up from automatically). -->
     <ApplicationIcon>game.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <!--
+    Directory.Build.props relocates BaseIntermediateOutputPath to Build\obj\TeronWoWLauncher\ (the
+    portfolio-wide BUILDER convention). The SDK's own default implicit-item exclusion only reliably
+    scopes to the CURRENT build's own fully-resolved $(IntermediateOutputPath) (e.g.
+    Build\obj\TeronWoWLauncher\x86\Debug\), not the whole relocated tree - so a stale sibling folder
+    left behind by an earlier build under a DIFFERENT Configuration/Platform combination (most
+    commonly: building without the required -p:Platform=x86, which silently lands in
+    Build\obj\TeronWoWLauncher\Debug\ instead of \x86\Debug\ - see the PlatformTarget comment above)
+    stays on disk and gets swept up by "**/*.cs" as if it were real source on every LATER build,
+    duplicating every generated XAML member/InitializeComponent/etc. against the current build's own
+    fresh copy of the same file (CS0102/CS0111/CS8646). Confirmed reproducing this exact failure
+    (2026-08-24) building the solution with -c Debug, then -c Release (both omitting
+    -p:Platform=x86, no restore) while a stale Build\obj\TeronWoWLauncher\Debug\ and \Release\ sat
+    on disk from an earlier no-platform build.
+
+    Excluded unconditionally rather than relying on the SDK's own scoping to happen to cover
+    whichever stale subfolder shows up next - this is a one-time structural fix, not a per-incident
+    cleanup.
+  -->
+  <ItemGroup>
+    <Compile Remove="Build\**" />
+    <EmbeddedResource Remove="Build\**" />
+    <None Remove="Build\**" />
+    <Page Remove="Build\**" />
+    <ApplicationDefinition Remove="Build\**" />
+    <Resource Remove="Build\**" />
+  </ItemGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x86'">
     <DebugType>none</DebugType>

@@ -458,7 +458,13 @@
       <!-- 0: Home (Login & Game) -->
       <TabItem d:IsHidden="True">
         <Grid Margin="24">
+          <!-- Three equal-width content columns (News, Profile list, Profile settings preview),
+               separated by two fixed-width dividers - all three content columns share the same *
+               weight so each always gets an equal third of the available width, same as the
+               News/Login split already did before this became a 3-column layout. -->
           <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="*"/>
@@ -502,78 +508,110 @@
             </Border>
           </Grid>
 
-          <!-- Divider between the "How to use" and "Login" panels. -->
+          <!-- Divider between the "How to use" and "Profile list" panels. -->
           <Border Grid.Column="1" Width="1" Background="#3A3A42" Margin="0,4"/>
 
-          <!-- Right: Client Path, Realm, Login - stacked, no side-by-side split. Every content row is
-               Auto-height (always exactly as tall as its own content, never clipped - this is what
-               fixed the earlier equal-thirds clipping bug); the gaps between/around them are explicit
-               proportional (*) spacer rows instead of fixed pixel margins, so extra vertical space on
-               a tall window is actually spread across all three sections rather than collapsing into
-               one gap around whichever section happens to sit in a lone leftover * row. All spacer
-               rows share equal 1* weight, so every gap (top, between sections, bottom) stays the
-               same size as the window grows/shrinks. -->
-          <Grid x:Name="HomeLoginColumnGrid" Grid.Column="2" Margin="50,0,0,0">
+          <!-- Middle: Profile list. Each profile is a tracked WoW directory (LauncherSettings.
+               ManagedDirectories) with its own name/realmlist/client identifier/login delay/WDB toggle
+               (DirectorySettings) - clicking a row switches to it (same mechanism the old
+               DirectorySwitchBox used); its fields are then edited directly in the "Profile settings"
+               column to the right, no separate dialog. -->
+          <Grid Grid.Column="2" Margin="50,40,50,40">
             <Grid.RowDefinitions>
-              <RowDefinition Height="*"/>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="*"/>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="*"/>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <StackPanel Grid.Row="1" HorizontalAlignment="Left">
-              <TextBlock Style="{StaticResource Heading2Text}" Text="Realm" Margin="0,0,0,6"/>
-                  <StackPanel Cursor="Hand" MouseLeftButtonUp="OnRealmlistLabelClicked">
-                    <StackPanel Orientation="Horizontal">
-                  <TextBlock Text="URL:" Style="{StaticResource CaptionText}"
-                             VerticalAlignment="Center" Margin="0,0,6,0"/>
-                  <TextBlock x:Name="RealmlistLabel" Style="{StaticResource CaptionText}"
-                             Text="(not set)" TextDecorations="Underline" VerticalAlignment="Center"/>
-                </StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,6,0,4">
-                      <TextBlock Text="Status:" Style="{StaticResource CaptionText}"
-             VerticalAlignment="Center" Margin="0,0,6,0"/>
-                      <!-- Realm status dot: periodically TCP-probed against the realmlist host's auth
-       port (see RealmStatusChecker) — green when it accepts a connection, red when
-       it doesn't, gray while no realmlist is set or the first check hasn't landed
-       yet. -->
-                      <Ellipse x:Name="RealmlistStatusDot" Width="10" Height="10" Fill="#6A6A72"
-           VerticalAlignment="Center" ToolTip="Realm status unknown"/>
+            <!-- Heading + "Add Profile" share the title row (same row height as the other two
+                 columns' plain headings) so the button sits right where the list starts, not
+                 stranded below it. -->
+            <Grid Grid.Row="0" Margin="0,0,0,16">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+              </Grid.RowDefinitions>
+              <TextBlock Grid.Column="0" Style="{StaticResource Heading2Text}" Text="Profiles" VerticalAlignment="Center"/>
+              <Button Grid.Column="0" Grid.Row="1" x:Name="AddProfileButton" Content="Add Profile"
+                      Click="OnAddProfile" VerticalAlignment="Center" Margin="0,10,0,0"/>
+            </Grid>
+
+            <!-- Solid card container (matches the Readme/Changelog box styling below) so rows read
+                 clearly against the faint background art instead of floating transparently over it. -->
+            <Border Grid.Row="1" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1"
+                    CornerRadius="6" Padding="10">
+              <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel x:Name="ProfileListPanel"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <!-- Divider between "Profile list" and "Profile settings". -->
+          <Border Grid.Column="3" Width="1" Background="#3A3A42" Margin="0,4"/>
+
+          <!-- Right: Profile settings for whichever profile is currently selected, plus Login. Heading
+               stays fixed in its own Auto row (same Margin as the other two columns' Grids), and only
+               the field content below it scrolls - so all three column titles line up on the same row
+               regardless of how much the selected profile's content overflows. -->
+          <Grid Grid.Column="4" Margin="50,40,50,40">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0" Style="{StaticResource Heading2Text}" Text="Profile settings" Margin="0,0,0,20"/>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+              <StackPanel x:Name="ProfileSettingsPanel" MaxWidth="420" HorizontalAlignment="Left">
+                    <TextBlock Style="{StaticResource Heading3Text}" Text="Name" Margin="0,0,0,6"/>
+                    <TextBox x:Name="ProfileNameBox" Height="36" Margin="0,0,0,4"/>
+                    <!--<TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,0" TextWrapping="Wrap" Text="Optional. Falls back to the directory path below (or &quot;Default&quot; for the launcher's own folder) when left blank."/>-->
+                    <TextBlock Style="{StaticResource Heading2Text}" Text="Login" Margin="0,20,0,20"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                      <TextBlock Style="{StaticResource Heading3Text}" VerticalAlignment="Center" Text="Realmlist" Margin="0,0,0,0"/>
+                      <Border Grid.Column="3" Width="1" Background="#3A3A42" Margin="15,0,15,0"/>
+                      <!-- <TextBlock Style="{StaticResource CaptionText}" VerticalAlignment="Center" Text="Status:" Margin="0,0,6,0"/> -->
+                      <!-- Realm status dot: periodically TCP-probed against the realmlist host's auth port
+       (see RealmStatusChecker) — green when it accepts a connection, red when it
+       doesn't, gray while no realmlist is set or the first check hasn't landed yet. -->
+                      <Ellipse x:Name="RealmlistStatusDot" Width="15" Height="15" Fill="#6A6A72" VerticalAlignment="Center" ToolTip="Realm status unknown" />
                     </StackPanel>
-                  </StackPanel>
-            </StackPanel>
+                    <ComboBox x:Name="RealmlistBox" Height="36" IsEditable="True" IsTextSearchEnabled="False" SelectionChanged="OnRealmlistHistorySelected"/>
+                    <TextBlock Style="{StaticResource Heading3Text}" Text="Account" Margin="0,12,0,6"/>
+                    <TextBox x:Name="AccountBox" Height="36"/>
+                    <TextBlock Style="{StaticResource Heading3Text}" Text="Password" Margin="0,12,0,6"/>
+                  <PasswordBox x:Name="PasswordBoxInput" Height="36"/>
+                  <CheckBox x:Name="SavePasswordCheck" Content="Remember password (encrypted on this PC)" Margin="0,10,0,4"/>
+                  <CheckBox x:Name="AutoLoginCheck" Content="Enable auto-login" Margin="0,4,0,4"/>
+                    <TextBlock Style="{StaticResource Heading2Text}" Text="Advanced" Margin="0,20,0,20"/>
+                    <TextBlock Style="{StaticResource Heading3Text}" Text="Directory" Margin="0,0,0,6"/>
+                <DockPanel Margin="0,0,0,4">
+                  <Button DockPanel.Dock="Right" Style="{StaticResource IconButtonStyle}" Content="&#xE8B7;"
+                          Height="32" Width="32" Margin="8,0,0,0" Click="OnBrowseGameFolder" ToolTip="Browse for the game folder"/>
+                  <TextBox x:Name="GameFolderBox" Height="36"/>
+                </DockPanel>
+                <TextBlock x:Name="GameFolderHint" Style="{StaticResource MicroText}" Margin="0" TextWrapping="Wrap"/>
+                <TextBlock Style="{StaticResource Heading3Text}" Text="Client identifier" Margin="0,16,0,6"/>
+                <ComboBox x:Name="ClientIdentifierCombo" Height="36" Margin="0,0,0,4" HorizontalAlignment="Stretch"
+                          SelectionChanged="OnClientIdentifierSelected"/>
+                <TextBlock x:Name="ClientIdentifierWarningText" Style="{StaticResource MicroText}"
+                           Foreground="#E6C067" TextWrapping="Wrap" Margin="0,0,0,4"
+                           Text="Pick a client identifier before installing — Play stays disabled until one is set."
+                           Visibility="Collapsed"/>
+                <TextBlock Style="{StaticResource MicroText}" Margin="0" TextWrapping="Wrap"
+                           Text="Determines the download URL and which executable tweaks are offered. Manage the list itself under Settings → Client Identifiers."/>
 
-            <StackPanel Grid.Row="3" HorizontalAlignment="Left">
-              <TextBlock Style="{StaticResource Heading2Text}" Text="Client Path" Margin="0,0,0,6"/>
-              <!-- Quick-switch between every WoW directory this launcher has managed before - each
-                   one already keeps its own addons/tweaks/credentials (DirectorySettings), so
-                   switching here is just a shortcut for retyping/re-browsing the same folder in
-                   Settings. -->
-              <!-- Sizes to its own content (the selected directory path) but capped by
-                   MaxWidth to the column's actual rendered width, bound to the outer
-                   HomeLoginColumnGrid rather than this StackPanel - the StackPanel itself is
-                   Left-aligned/content-sized too, so binding to it would be circular. -->
-              <ComboBox x:Name="DirectorySwitchBox" Height="36.62"
-                        MaxWidth="{Binding ActualWidth, ElementName=HomeLoginColumnGrid}"
-                        ToolTip="Switch to a previously managed WoW directory"
-                        SelectionChanged="OnManagedDirectorySelected"/>
-            </StackPanel>
+                <TextBlock Style="{StaticResource Heading3Text}" Text="Login delay (ms)" Margin="0,16,0,6"/>
+                <TextBox x:Name="DelayBox" Height="36" Width="130" HorizontalAlignment="Left" Margin="0,0,0,4"/>
+                <TextBlock Style="{StaticResource MicroText}" Margin="0" TextWrapping="Wrap"
+                           Text="Fallback only! The launcher normally detects when the client has finished loading on its own and logs in immediately."/>
 
-            <StackPanel Grid.Row="5" MaxWidth="420" HorizontalAlignment="Left" VerticalAlignment="Center">
-              <TextBlock Style="{StaticResource Heading2Text}" Text="Login" Margin="0,0,0,20"/>
-              <CheckBox x:Name="AutoLoginCheck" Content="Enable auto-login" Margin="0"/>
-
-              <TextBlock Style="{StaticResource BodyText}" Text="Account" Margin="0,16,0,4"/>
-              <TextBox x:Name="AccountBox"/>
-
-              <TextBlock Style="{StaticResource BodyText}" Text="Password" Margin="0,12,0,4"/>
-              <PasswordBox x:Name="PasswordBoxInput"/>
-              <CheckBox x:Name="SavePasswordCheck"
-                                      Content="Remember password (encrypted on this PC)"/>
-            </StackPanel>
+                <CheckBox x:Name="CleanWdbCheck" Content="Clean up client cache (WDB) before every launch" Margin="0,16,0,20"/>
+              </StackPanel>
+            </ScrollViewer>
           </Grid>
         </Grid>
       </TabItem>
@@ -1017,6 +1055,7 @@
                     <Grid Margin="0,4">
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
@@ -1026,7 +1065,11 @@
                               Tag="{Binding}" Click="OnAddonDetailsClick" ToolTip="View details"
                               Margin="0,0,8,0"/>
 
-                      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                      <Button Grid.Column="1" Style="{StaticResource GhostIconButtonStyle}" Content="&#xE8AC;"
+                              Tag="{Binding}" Click="OnRenameAddonFolderClick" ToolTip="Rename this addon's folder"
+                              Margin="0,0,8,0"/>
+
+                      <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                         <TextBlock Style="{StaticResource BodyText}" svc:WowColoredText.Text="{Binding Name}" VerticalAlignment="Center"/>
                         <TextBlock Text="{Binding VersionDisplay}" Style="{StaticResource CaptionText}"
                                    Margin="8,0,0,0" VerticalAlignment="Center"/>
@@ -1034,11 +1077,11 @@
                                    Margin="8,0,0,0" VerticalAlignment="Center"/>
                       </StackPanel>
 
-                      <Button Grid.Column="2" Style="{StaticResource IconButtonStyle}" Content="&#xE896;"
+                      <Button Grid.Column="3" Style="{StaticResource IconButtonStyle}" Content="&#xE896;"
                               Tag="{Binding}" Click="OnUpdateAddonClick" ToolTip="Update this addon"
                               Visibility="{Binding HasUpdateAvailable, Converter={StaticResource BoolToVis}}"
                               Margin="8,0,0,0" Width="28" Height="28" Background="{StaticResource UpdateActionBrush}"/>
-                      <Button Grid.Column="3" Style="{StaticResource IconButtonStyle}" Content="&#xE74D;"
+                      <Button Grid.Column="4" Style="{StaticResource IconButtonStyle}" Content="&#xE74D;"
                               Tag="{Binding}" Click="OnRemoveAddonClick" ToolTip="Remove this addon"
                               Margin="8,0,0,0" Width="28" Height="28" Background="{StaticResource RemoveActionBrush}"/>
                     </Grid>
@@ -1172,21 +1215,9 @@
                       Margin="0,0,0,20"
                       TextWrapping="Wrap"
                   />
-                  <DockPanel LastChildFill="True">
-                    <TextBlock DockPanel.Dock="Left" Text="&#xE774;" FontFamily="Segoe Fluent Icons"
-                               FontSize="14" Foreground="{StaticResource InstallActionBrush}"
-                               VerticalAlignment="Center" Margin="0,0,6,0" ToolTip="Global setting"/>
-                    <TextBlock Style="{StaticResource Heading3Text}" Text="Installation directory"/>
-                  </DockPanel>
-              <TextBlock Style="{StaticResource MicroText}" Text="The folder containing WoW.exe. If you moved your install, browse to the new location."
-                                     Margin="0,0,0,4" TextWrapping="Wrap"/>
-              <DockPanel Margin="0,4,0,6">
-                <Button DockPanel.Dock="Right" Style="{StaticResource IconButtonStyle}" Content="&#xE8B7;"
-                        Margin="8,0,0,0" Click="OnBrowseGameFolder" ToolTip="Browse for the game folder"/>
-                <TextBox x:Name="GameFolderBox"/>
-              </DockPanel>
-              <TextBlock x:Name="GameFolderHint" Style="{StaticResource MicroText}" Margin="0,0,0,16"/>
-
+              <TextBlock Style="{StaticResource Heading3Text}" Text="Game files"/>
+              <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,4" TextWrapping="Wrap"
+                         Text="Applies to whichever profile is currently selected on Home."/>
               <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,0,0,4">
                 <Button x:Name="RepairGameFilesButton" Content="Repair Game Files" Click="OnRepairGameFiles"/>
                 <Button x:Name="DeleteGameFilesButton" Content="Delete Game Files" Click="OnDeleteGameFiles" Margin="8,0,0,0"
@@ -1195,30 +1226,17 @@
               <TextBlock Style="{StaticResource MicroText}" TextWrapping="Wrap" Margin="0,0,0,20"
                                      Text="Repair re-downloads and reinstalls the full client from the source URL below, overwriting any file that differs (no per-file update list, so this always refreshes the whole install). Delete removes exactly what the client archive provided (Data\, WoW.exe, Fonts\, etc.) - your installed addons, WTF settings, and logs are left untouched."/>
 
-              <TextBlock Style="{StaticResource Heading3Text}" Text="Realmlist"/>
-              <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,4"
-                         Text="Any private vanilla server, e.g. logon.myserver.com — pick a previously used one from the dropdown, or type a new address."/>
-              <ComboBox x:Name="RealmlistBox" Margin="0,0,0,20" IsEditable="True" IsTextSearchEnabled="False"
-                        SelectionChanged="OnRealmlistHistorySelected"/>
-
               <DockPanel LastChildFill="True">
                 <TextBlock DockPanel.Dock="Left" Text="&#xE774;" FontFamily="Segoe Fluent Icons"
                            FontSize="14" Foreground="{StaticResource InstallActionBrush}"
                            VerticalAlignment="Center" Margin="0,0,6,0" ToolTip="Global setting"/>
-                <TextBlock Style="{StaticResource Heading3Text}" Text="Client download URL"/>
+                <TextBlock Style="{StaticResource Heading3Text}" Text="Client Identifiers"/>
               </DockPanel>
-              <TextBlock Style="{StaticResource MicroText}" Text="(advanced — override for another server's client zip)" Margin="0,0,0,4"/>
-              <TextBox x:Name="ClientUrlBox" Margin="0,0,0,20"/>
-
-                  <TextBlock Style="{StaticResource Heading3Text}" Text="Login delay (ms)"/>
-              <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,4"
-                         Text="Fallback only! The launcher normally detects when the client has finished loading on its own and logs in immediately. This delay is used only if that detection can't tell in time." TextWrapping="Wrap"/>
-              <TextBox x:Name="DelayBox" Width="130" HorizontalAlignment="Left" Margin="0,0,0,20"/>
-
-              <TextBlock Style="{StaticResource Heading3Text}" Text="Client cache"/>
-              <CheckBox x:Name="CleanWdbCheck" Content="Clean up client cache (WDB) before every launch" Margin="0,4,0,4"/>
-              <TextBlock Style="{StaticResource MicroText}" TextWrapping="Wrap" Margin="0,0,0,20"
-                         Text="Deletes the WDB folder before Play starts the game. It's rebuilt automatically from the server, so this is always safe — useful on private servers where stale cached item/quest data can cause wrong names, tooltips, or icons."/>
+              <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,8" TextWrapping="Wrap"
+                         Text="Known servers/clients, shared across every profile. Each profile picks one by name in its Profile settings panel on Home; editing a client identifier's URL or category here applies to every profile using it."/>
+              <StackPanel x:Name="ClientProfilesPanel" Margin="0,0,0,8"/>
+              <Button x:Name="AddClientProfileButton" Content="Add Client Identifier" HorizontalAlignment="Left"
+                      Click="OnAddClientProfile" Margin="0,0,0,20"/>
 
               <DockPanel LastChildFill="True">
                 <TextBlock DockPanel.Dock="Left" Text="&#xE774;" FontFamily="Segoe Fluent Icons"

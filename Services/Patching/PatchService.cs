@@ -116,13 +116,15 @@ public sealed class PatchService
 
         foreach (PatchDefinition patch in OrderedForApply(catalog))
         {
-            if (!enabledIds.Contains(patch.Id))
-            {
-                continue;
-            }
-
             parameters.TryGetValue(patch.Id, out double? value);
-            ApplyPatch(image, patch, value);
+            if (enabledIds.Contains(patch.Id))
+            {
+                ApplyPatch(image, patch, value);
+            }
+            else
+            {
+                ApplyPatchOff(image, patch, value);
+            }
         }
 
         // Only touch the real path once the whole image is patched successfully, and only via an
@@ -214,7 +216,15 @@ public sealed class PatchService
             }
 
             IReadOnlyList<PatchStep> steps = patch.BuildSteps(null);
-            if (steps.Count > 0 && steps.All(s => StepApplied(image, s)))
+
+            // A toggle patch whose every step carries a WriteOff is fully revertible regardless of
+            // what state the exe is currently in - Rebuild can always reach either "on" (idempotent
+            // Write) or "off" (explicit WriteOff) from here, so it's a legitimate pristine-backup
+            // baseline either way and shouldn't block backup creation just because a community client
+            // happens to ship it already toggled on. Only a patch with no revert path at all still
+            // needs the strict "must currently be pristine" gate below.
+            bool fullyRevertible = steps.Count > 0 && steps.All(s => s.WriteOff is not null);
+            if (!fullyRevertible && steps.Count > 0 && steps.All(s => StepApplied(image, s)))
             {
                 applied.Add(patch.Id);
             }
@@ -230,6 +240,31 @@ public sealed class PatchService
         foreach (PatchStep step in steps)
         {
             ApplyStep(image, step, patch.Name);
+        }
+    }
+
+    /// <summary>
+    /// Reverts a disabled patch's steps that carry a <see cref="PatchStep.WriteOff"/> back to that
+    /// value - needed because a community client's pristine backup can already contain the "on"
+    /// bytes for a tweak it ships baked in, so merely skipping the write (the normal meaning of
+    /// "disabled") would silently leave that baked-in value in place instead of actually turning it
+    /// off. A step without a WriteOff is left untouched, same as before.
+    /// </summary>
+    private void ApplyPatchOff(byte[] image, PatchDefinition patch, double? parameter)
+    {
+        IReadOnlyList<PatchStep> steps = patch.BuildSteps(parameter);
+        if (!steps.Any(s => s.WriteOff is not null))
+        {
+            return;
+        }
+
+        _log.Info($"  Reverting patch: {patch.Name}");
+        foreach (PatchStep step in steps)
+        {
+            if (step.WriteOff is not null)
+            {
+                ApplyOffStep(image, step, patch.Name);
+            }
         }
     }
 
@@ -282,6 +317,48 @@ public sealed class PatchService
 
             Buffer.BlockCopy(step.Write, 0, image, index, step.Write.Length);
         }
+    }
+
+    /// <summary>
+    /// Writes a step's <see cref="PatchStep.WriteOff"/> back, reverting whatever "on" value the
+    /// pristine backup may already carry. Offset-mode only - every current WriteOff-bearing step is
+    /// offset-based, so pattern-mode (Offset &lt; 0) is deliberately left unsupported here.
+    /// </summary>
+    private static void ApplyOffStep(byte[] image, PatchStep step, string patchName)
+    {
+        if (step.Offset < 0 || step.WriteOff is not { Length: > 0 } writeOff)
+        {
+            return;
+        }
+
+        int offset = checked((int)step.Offset);
+        if (offset + writeOff.Length > image.Length)
+        {
+            throw new InvalidOperationException(
+                $"Patch '{patchName}': revert offset 0x{offset:X} is beyond the end of the file.");
+        }
+
+        // Idempotent: already reverted, nothing to do.
+        if (RegionEquals(image, offset, writeOff))
+        {
+            return;
+        }
+
+        // Safe to revert only from a state we recognize: either the patch's own "on" value (the
+        // normal case - a community client's baked-in tweak) or one of its AcceptBefore fingerprints
+        // (already pristine, so this is a genuine no-op once BlockCopy below runs). Anything else
+        // means the exe isn't what we think it is; abort rather than write blind.
+        bool recognizedOn = RegionEquals(image, offset, step.Write);
+        bool recognizedBefore = step.AcceptBefore is { Length: > 0 } fingerprints &&
+            fingerprints.Any(expected => RegionEquals(image, offset, expected));
+        if (!recognizedOn && !recognizedBefore)
+        {
+            throw new InvalidOperationException(
+                $"Patch '{patchName}': unexpected bytes at 0x{offset:X} while reverting. The client is " +
+                "likely an unsupported build; aborting so the executable is not corrupted.");
+        }
+
+        Buffer.BlockCopy(writeOff, 0, image, offset, writeOff.Length);
     }
 
     private static bool StepApplied(byte[] image, PatchStep step)

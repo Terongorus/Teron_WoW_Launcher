@@ -438,8 +438,16 @@
                                               IsHitTestVisible="False" Visibility="Collapsed"
                                               Content="{TemplateBinding SelectionBoxItem}"/>
 
+                            <!-- Padding="0" is required here, not just cosmetic: this TextBox is still
+                                 matched by the app-wide implicit TextBox style (App.xaml), which sets
+                                 its own Padding="5,4" - stacked on top of the Margin="{TemplateBinding
+                                 Padding}" line below (also 5,4, from the outer ComboBox's own Padding),
+                                 that doubled the vertical inset and clipped descenders inside a
+                                 fixed-height editable ComboBox (the Realmlist field). A non-editable
+                                 ComboBox never hit this, since it shows SelectionBoxItem via
+                                 ContentSite's ContentPresenter instead of a real nested TextBox. -->
                             <TextBox x:Name="PART_EditableTextBox" Grid.Column="0"
-                                     Margin="{TemplateBinding Padding}"
+                                     Margin="{TemplateBinding Padding}" Padding="0"
                                      VerticalAlignment="Center"
                                      Background="Transparent" BorderThickness="0"
                                      Foreground="{TemplateBinding Foreground}"

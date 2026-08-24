@@ -10,8 +10,24 @@ namespace TeronWoWLauncher.Models;
 /// </summary>
 public sealed class DirectorySettings
 {
+    /// <summary>
+    /// User-facing label for this profile on Home's Profile list. Optional - when blank, the UI falls
+    /// back to showing the directory path itself (or "Default" specifically for the launcher's own
+    /// folder, since that raw path is rarely meaningful to the user).
+    /// </summary>
+    public string? Name { get; set; }
+
     /// <summary>Remote client archive signature recorded at the time of the last successful install/update.</summary>
     public string? InstalledClientSignature { get; set; }
+
+    /// <summary>
+    /// Which entry of the global <see cref="LauncherSettings.ClientProfiles"/> table this directory
+    /// holds - drives its download URL and which executable tweaks are offered. Null means no profile
+    /// has been assigned yet (a fresh directory, or one whose assigned profile was since deleted) -
+    /// callers needing the category/URL must handle this explicitly rather than falling back to a
+    /// default, since guessing wrong here risks patching the wrong exe layout.
+    /// </summary>
+    public string? ClientProfileId { get; set; }
 
     public string Account { get; set; } = string.Empty;
 
@@ -30,6 +46,15 @@ public sealed class DirectorySettings
 
     /// <summary>Ids of executable patches the user has enabled (applied in fixed catalog order).</summary>
     public List<string> EnabledPatchIds { get; set; } = new();
+
+    /// <summary>
+    /// True once this directory's default-enabled patches (see <see cref="PatchDefinition.DefaultEnabled"/>,
+    /// e.g. the TurtleWoW/OctoWoW tweaks that already ship baked into those clients) have been seeded
+    /// into <see cref="EnabledPatchIds"/>. Seeding only ever happens once per directory - after that,
+    /// an empty <see cref="EnabledPatchIds"/> is trusted as the user's own deliberate "everything off"
+    /// choice rather than re-applied over every time the Tweaks tab loads.
+    /// </summary>
+    public bool PatchDefaultsSeeded { get; set; }
 
     /// <summary>Chosen values for parameterized patches, keyed by patch id.</summary>
     public Dictionary<string, double> PatchParameters { get; set; } = new();

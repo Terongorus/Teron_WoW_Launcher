@@ -12,20 +12,22 @@ the executable, injects your DLLs, launches the game, and logs you in — in tha
 time, automatically skipping anything that hasn't changed since last time. The launcher steps back
 out of your way once the game is up, and comes back to the front on its own the moment you close it.
 It doesn't need to live inside any WoW folder itself, and it can manage more than one installation
-at once — switch between them from a dropdown on the Home tab, and each one keeps its own account,
-realmlist, tweaks, patches, DLLs, and addons.
+at once as separate **Profiles** — switch between them from the Home tab, and each one keeps its
+own directory, realmlist, client identifier, login delay/WDB setting, account, tweaks, patches,
+DLLs, and addons.
 
 ## Getting started
 
-1. Point the launcher at a World of Warcraft folder — the one with `WoW.exe` in it — from the
-   Home tab's directory selector (or **Settings**). It can live anywhere on disk; it doesn't need
-   to be inside that folder.
-2. On the **Home** tab, set your realmlist (top-right link, or via Settings), and optionally your
-   account and password if you want to log in automatically.
+1. On the **Home** tab, pick (or add) a Profile and point it at a World of Warcraft folder — the
+   one with `WoW.exe` in it, or an empty folder if you want the launcher to install one for you.
+   The launcher itself can live anywhere on disk; it doesn't need to be inside that folder.
+2. Set that profile's realmlist, and pick a **Client identifier** (Vanilla, TurtleWoW, OctoWoW, or
+   your own) so the launcher knows which client baseline to expect — required before you can
+   install or play. Optionally set an account and password if you want to log in automatically.
 3. Hit the big button in the bottom-right corner. If there's no client yet, it reads **Install** —
-   pick a destination folder and the launcher downloads and sets everything up for you. Once a
-   client's in place, the same button reads **Play**; if a newer client archive shows up later,
-   it reads **Update** instead. Whichever it says, that's the one thing you need to click.
+   the launcher downloads and sets everything up for you. Once a client's in place, the same
+   button reads **Play**; if a newer client archive shows up later, it reads **Update** instead.
+   Whichever it says, that's the one thing you need to click.
 
 That's the whole day-to-day workflow. Everything below is what each tab does, for when you want
 to go further than the defaults.
@@ -34,17 +36,20 @@ to go further than the defaults.
 
 ### Home
 
-Your account/password fields and auto-login toggle live here, along with a live-rendered copy of
-this README and the changelog — so you can check what changed without leaving the app or digging
-through folders. Auto-login types your credentials directly (bypassing your keyboard layout, so a
-non-English layout can't garble your password) and waits for the client to actually finish
-loading before it types, instead of guessing a fixed delay. The Realmlist label carries a live
-status dot — green when the auth server accepts a connection, red when a real host refuses or
-times out, gray when the address doesn't even resolve — and the field itself remembers every
-realm you've actually connected to, offered back as a history dropdown. A directory dropdown lets
-you manage more than one WoW installation from the same launcher — pick a folder you haven't used
-before and it's added to the list; switching to a different one loads that installation's own
-account, realmlist, tweaks, patches, DLLs, and addons.
+Three columns: a live-rendered copy of this README and the changelog on the left, your **Profiles**
+in the middle, and that profile's settings on the right. A Profile bundles everything specific to
+one WoW installation — give it a name (falls back to the directory path, or "Default" for the
+launcher's own folder, if left blank), point it at a directory, set its realmlist, pick a **Client
+identifier**, and its login delay/WDB cleanup/account/password all live in the same panel. The
+Realmlist field carries a live status dot next to it — green when the auth server accepts a
+connection, red when a real host refuses or times out, gray when the address doesn't even resolve
+— and remembers every realm you've actually connected to, offered back as a history dropdown.
+Auto-login types your credentials directly (bypassing your keyboard layout, so a non-English
+layout can't garble your password) and waits for the client to actually finish loading before it
+types, instead of guessing a fixed delay. Click a different Profile in the list to switch to it —
+everything else in the launcher (Tweaks, DLLs, MPQ Patches, Addons) follows the active profile.
+Play/Install stays disabled, with a note explaining why, until a profile has a Client identifier
+assigned.
 
 ### Tweaks
 
@@ -54,8 +59,12 @@ every time you change something — never patching an already-patched file. Spli
 some HD/visual MPQ patches need) — enable all three if you plan to run custom MPQ patches — and
 **Optional**: widescreen field of view (shown in degrees, not raw radians), render/grass/nameplate
 distance, sound channels, sound-while-alt-tabbed, auto-loot, and a camera rotation glitch fix, most
-with a slider *and* a type-in box for the exact value you want. Every change applies the moment you
-make it — there's no "Save" button to remember.
+with a slider *and* a type-in box for the exact value you want. On TurtleWoW/OctoWoW profiles,
+several of these (LAA, sound-in-background, auto-loot, the camera fix, FoV, nameplate distance)
+ship already baked into the client — they still show up as real, togglable entries (checked by
+default, so an existing install isn't silently reverted) rather than read-only notes, and
+unchecking one genuinely reverts that byte range to Blizzard's original value. Every change applies
+the moment you make it — there's no "Save" button to remember.
 
 ### DLLs
 
@@ -98,16 +107,16 @@ an "Ignore updates" checkbox that permanently stops it from being flagged.
 
 ### Settings
 
-The one place for launcher-level configuration: your install directory, realmlist, client
-download URL (only needed if you're not using the default), and the auto-login delay fallback.
-**Repair Game Files** re-downloads and reinstalls the whole client from the source URL, overwriting
-anything that differs locally — useful if something's gotten corrupted and you don't want to track
-down which file. Two optional toggles live here too: cleaning up the WDB client cache before every
-launch (safe — the client rebuilds it from the server — and useful on private servers where stale
-cached data shows wrong item/quest names, tooltips, or icons), and minimizing the launcher the
-moment the game starts (it always comes back to the foreground on its own once the game closes,
-whether or not this is on). Ignored DLLs (see the DLLs tab above) are managed here too,
-individually or all at once.
+Everything that isn't tied to one specific profile. **Client Identifiers** is the shared table
+every profile's Client identifier picks from — name, download URL, and category (Vanilla or
+Vanilla+), seeded with Kronos, TurtleWoW, and OctoWoW defaults, but freely editable or extendable
+with your own. **Repair Game Files**/**Delete Game Files** apply to whichever profile is currently
+selected on Home — Repair re-downloads and reinstalls the whole client from its assigned
+identifier's URL, overwriting anything that differs locally, useful if something's gotten
+corrupted and you don't want to track down which file. Minimizing the launcher the moment the game
+starts (it always comes back to the foreground on its own once the game closes, whether or not
+this is on) lives here too, along with ignored DLLs (see the DLLs tab above), managed individually
+or all at once.
 
 ### Log
 
@@ -152,7 +161,7 @@ own code.
 
 ## Project status
 
-Version 2.0.0-beta.2. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
+Version 2.0.0-beta.3. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
 ## License

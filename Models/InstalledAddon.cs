@@ -42,6 +42,15 @@ public sealed class InstalledAddon
     /// <summary>The AddOns subfolder names this addon installed (an archive may contain several).</summary>
     public List<string> Folders { get; set; } = new();
 
+    /// <summary>
+    /// User-chosen on-disk folder names, keyed by the repo/.toc-derived canonical name they replace.
+    /// Applied on every future install/update (see <c>AddonInstaller.InstallFromDirectory</c>) so a
+    /// rename made via the launcher's UI survives updates instead of being overwritten by the
+    /// canonical name on the next re-install — <see cref="SourceRef"/> is untouched by a rename, so
+    /// update-checking keeps comparing against the same remote regardless.
+    /// </summary>
+    public Dictionary<string, string> FolderRenames { get; set; } = new();
+
     public DateTime InstalledUtc { get; set; }
 
     /// <summary>User opt-out, set from the Details dialog: never flag this addon as updatable, even if a newer remote version is found.</summary>

@@ -10,6 +10,7 @@ using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
 
+using TeronWoWLauncher.Models;
 using TeronWoWLauncher.Services.Core;
 namespace TeronWoWLauncher.Services.Launch;
 
@@ -30,7 +31,23 @@ public sealed class GameInstallService
     /// <summary>Built-in default source (the vanilla client zip TwinStar hosts).</summary>
     public const string DefaultClientUrl = "http://cdn.twinstar-wow.com/WoW_Vanilla.zip";
 
-    /// <summary>Expected client version for a correct vanilla install.</summary>
+    /// <summary>Built-in default source for OctoWoW's client (confirmed by the user).</summary>
+    public const string DefaultOctoWowClientUrl = "https://octowow.st/download/client";
+
+    /// <summary>
+    /// TurtleWoW has no confirmed canonical client zip URL - its server has shut down and it was
+    /// normally distributed via its own launcher rather than a bare downloadable zip, so this
+    /// client type always requires the user to supply a URL (or point at an already-installed
+    /// folder) rather than falling back to a built-in default.
+    /// </summary>
+    public const string? DefaultTurtleWowClientUrl = null;
+
+    /// <summary>
+    /// Expected client version for a correct vanilla install. TurtleWoW/OctoWoW aren't checked
+    /// against this - both report the same "1.12.1" version resource as vanilla (confirmed by
+    /// reading it directly from real client executables) despite being modified clients, so a
+    /// version-string match can't tell them apart; see <see cref="IsUpToDate"/>.
+    /// </summary>
     public const string ExpectedVersion = "1.12.1";
 
     // Fixed name (not a per-attempt GUID) is what makes resuming a partial download possible at
@@ -114,8 +131,20 @@ public sealed class GameInstallService
         }
     }
 
-    /// <summary>True when a correct 1.12.1 client is already installed.</summary>
-    public bool IsUpToDate(string installDir) => GetClientVersion(installDir) == ExpectedVersion;
+    /// <summary>
+    /// True when this installation is considered current for its client category. Vanilla is checked
+    /// against the known exact version string; Vanilla+ clients skip that check entirely - both
+    /// TurtleWoW and OctoWoW report the same "1.12.1" version resource as vanilla despite being
+    /// modified clients (confirmed by reading it directly from real client executables), so a
+    /// version-string match can't tell them apart. They're considered up to date whenever a client is
+    /// installed at all, deferring "is there something new" to the remote-signature comparison in
+    /// <see cref="CheckForUpdateAsync"/> instead.
+    /// </summary>
+    public bool IsUpToDate(string installDir, ClientCategory category) => category switch
+    {
+        ClientCategory.Vanilla => GetClientVersion(installDir) == ExpectedVersion,
+        _ => IsInstalled(installDir),
+    };
 
     /// <summary>
     /// Compares the remote client zip's size/Last-Modified/ETag against <paramref name="installedSignature"/>

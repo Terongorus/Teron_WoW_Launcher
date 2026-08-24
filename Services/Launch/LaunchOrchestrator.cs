@@ -172,18 +172,16 @@ public sealed class LaunchOrchestrator
             return;
         }
 
-        try
+        // Deliberately NOT caught here - unlike PlayAsync (which swallows this same failure to launch
+        // unpatched rather than block the user from playing at all), this is the "apply on tweak
+        // change" path with no such fallback to degrade to, so the caller (MainWindow's
+        // OnPatchApplyTick) needs the exception to actually reach it in order to show a toast instead
+        // of the failure only ever showing up in the Log tab.
+        await SyncExecutablePatchesGuardedAsync(wowDir, message =>
         {
-            await SyncExecutablePatchesGuardedAsync(wowDir, message =>
-            {
-                _log.Info(message);
-                progress?.Report(message);
-            });
-        }
-        catch (Exception ex)
-        {
-            _log.Error("Applying patches failed.", ex);
-        }
+            _log.Info(message);
+            progress?.Report(message);
+        });
     }
 
     /// <summary>
@@ -254,9 +252,26 @@ public sealed class LaunchOrchestrator
         }
     }
 
+    /// <summary>
+    /// Looks up the directory's assigned <see cref="ClientProfile"/> from the global table. Null both
+    /// when no profile has been assigned yet and when the assigned id no longer matches any row (the
+    /// profile was deleted) - callers on the UI thread should already have refused to reach this point
+    /// via MainWindow's no-profile-assigned dialog, so this is a defensive fallback, not the primary
+    /// guard.
+    /// </summary>
+    private ClientProfile? ResolveClientProfile()
+        => _settings.Current.ClientProfiles.FirstOrDefault(p => p.Id == _dirSettings.Current.ClientProfileId);
+
     private void SyncExecutablePatches(string wowDir, Action<string> report)
     {
-        IReadOnlyList<PatchDefinition> catalog = PatchCatalog.All;
+        ClientProfile? profile = ResolveClientProfile();
+        if (profile is null)
+        {
+            report("No client profile assigned to this directory — pick one in Settings before patches can be applied.");
+            return;
+        }
+
+        IReadOnlyList<PatchDefinition> catalog = PatchCatalog.For(profile.Category, profile.Id);
         var enabled = new HashSet<string>(
             _dirSettings.Current.EnabledPatchIds.Where(id => catalog.Any(p => p.Id == id)));
 
@@ -277,7 +292,16 @@ public sealed class LaunchOrchestrator
             bool backupExistedBefore = _patch.BackupExists(wowDir);
             if (!_patch.EnsurePristineBackup(wowDir, catalog))
             {
-                throw new InvalidOperationException("Could not establish a pristine WoW.exe backup.");
+                // The specific mismatched-patch detail is already logged by EnsurePristineBackup itself
+                // (PatchService); this message is what actually reaches the user (via a toast - see
+                // ApplyPatchesAsync/OnPatchApplyTick), so it names the most common real cause instead of
+                // just "could not establish a backup": WoW.exe's bytes don't match ANY pristine
+                // fingerprint this catalog knows about, which happens whenever the wrong Client
+                // identifier is assigned to a directory (its category/seed picks the wrong catalog
+                // entirely) - see the Log tab for exactly which patch(es) tripped the check.
+                throw new InvalidOperationException(
+                    $"WoW.exe doesn't match a pristine baseline for '{profile.Name}' ({(profile.Category == ClientCategory.VanillaPlus ? "Vanilla+" : "Vanilla")}). " +
+                    "If this directory actually runs a different client, double-check the Client identifier assigned to it in Profile settings. See the Log tab for details.");
             }
 
             // Record the hash only at the moment the backup is actually (re)created — it never

@@ -46,7 +46,7 @@ public sealed class AddonLibrary
         string path = AddonPaths.AddonsFilePath(wowDir);
         try
         {
-            MigrateLegacyGlobalFileIfPresent(path);
+            MigrateLegacyGlobalFileIfPresent(wowDir, path);
 
             if (File.Exists(path))
             {
@@ -71,7 +71,18 @@ public sealed class AddonLibrary
     // directory Load() is called for after upgrading adopts that old file as its own starting
     // point, then the old file is renamed out of the way so it can never be copied into some
     // OTHER, unrelated directory the user points the launcher at later.
-    private void MigrateLegacyGlobalFileIfPresent(string targetPath)
+    //
+    // "First directory to load" is picked by load order, not by which directory the legacy list
+    // actually came from - confirmed (2026-08-24) landing an entire other install's tracked addon
+    // list (~90 entries) onto a directory that never had any of them installed, the first time an
+    // unrelated second directory happened to be the one that loaded after the fix took effect. Every
+    // migrated entry is now filtered against what's actually present in the TARGET directory's own
+    // Interface\AddOns - an entry only survives if at least one of its Folders exists there, and only
+    // those existing folders are kept (a partially-installed multi-folder addon doesn't drag in
+    // folders this directory never had). A directory with none of the legacy addons actually
+    // installed - the scenario that broke - now correctly ends up with an empty list instead of a
+    // fabricated one.
+    private void MigrateLegacyGlobalFileIfPresent(string wowDir, string targetPath)
     {
         if (File.Exists(targetPath))
         {
@@ -99,14 +110,32 @@ public sealed class AddonLibrary
 
         try
         {
-            // Unlike AtomicFile.WriteAllText, a plain File.Copy doesn't create the destination
-            // directory itself - targetPath now lives inside PerDirectoryDataFolder's ".teronwow"
-            // subfolder, which may not exist yet for a directory that's never had any per-directory
-            // data file before.
+            string addonsDir = AddonPaths.AddOnsDir(wowDir);
+            string json = File.ReadAllText(legacyPath);
+            List<InstalledAddon> legacy = JsonSerializer.Deserialize<List<InstalledAddon>>(json) ?? new List<InstalledAddon>();
+
+            var filtered = new List<InstalledAddon>();
+            foreach (InstalledAddon addon in legacy)
+            {
+                List<string> existingFolders = addon.Folders
+                    .Where(f => Directory.Exists(Path.Combine(addonsDir, f)))
+                    .ToList();
+                if (existingFolders.Count > 0)
+                {
+                    addon.Folders = existingFolders;
+                    filtered.Add(addon);
+                }
+            }
+
+            // Unlike AtomicFile.WriteAllText, Directory.CreateDirectory below doesn't happen on its
+            // own - targetPath now lives inside PerDirectoryDataFolder's ".teronwow" subfolder, which
+            // may not exist yet for a directory that's never had any per-directory data file before.
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-            File.Copy(legacyPath, targetPath);
+            AtomicFile.WriteAllText(targetPath, JsonSerializer.Serialize(filtered, JsonOptions));
             File.Move(legacyPath, migratedMarkerPath);
-            _log.Info($"Migrated the old shared addons.json into {targetPath} (per-directory addon tracking).");
+            _log.Info(
+                $"Migrated the old shared addons.json into {targetPath} (per-directory addon tracking) - " +
+                $"kept {filtered.Count} of {legacy.Count} entries that actually exist in {addonsDir}.");
         }
         catch (Exception ex)
         {
@@ -149,15 +178,21 @@ public sealed class AddonLibrary
 
         try
         {
+            // An existing tracked addon for this same source (a re-install/update) carries any
+            // rename the user has made via the UI - passed through so InstallFromDirectory keeps
+            // writing to the renamed folder instead of recreating the canonical name.
+            InstalledAddon? existing = _addons.FirstOrDefault(a =>
+                string.Equals(a.SourceRef, download.SourceRef, StringComparison.OrdinalIgnoreCase));
+
             // Off the calling thread deliberately - InstallFromDirectory is a plain synchronous
             // File.Copy loop with no await in it anywhere, and AddAsync is always awaited directly
             // from the UI thread (MainWindow.AddAddonAsync). A multi-folder addon (several .toc
             // subfolders in one repo) can otherwise noticeably freeze the window mid-copy - the same
             // bug class already fixed for the client zip's own extraction.
             List<InstalledFolderInfo> folders = await Task.Run(
-                () => _installer.InstallFromDirectory(download.ContentDir, wowDir), ct);
+                () => _installer.InstallFromDirectory(download.ContentDir, wowDir, existing?.FolderRenames), ct);
             InstalledFolderInfo primary =
-                folders.FirstOrDefault(f => string.Equals(f.Folder, download.SuggestedName, StringComparison.OrdinalIgnoreCase))
+                folders.FirstOrDefault(f => string.Equals(f.CanonicalFolder, download.SuggestedName, StringComparison.OrdinalIgnoreCase))
                 ?? folders[0];
 
             // Display name and version always come from the addon's own .toc when it has them — this
@@ -260,51 +295,69 @@ public sealed class AddonLibrary
         return _localScanner.Scan(wowDir, trackedFolders);
     }
 
-    public readonly record struct LocalAddonSyncResult(int AutoAdopted, IReadOnlyList<LocalAddonCandidate> Conflicts);
+    public readonly record struct LocalAddonSyncResult(int AutoAdopted, int Merged, IReadOnlyList<LocalAddonCandidate> Conflicts);
 
     /// <summary>
-    /// Scans for untracked local AddOns folders and adopts each one automatically, UNLESS its name
-    /// matches an already-tracked addon (e.g. the same addon exists both as a hand-installed folder and
-    /// a GitHub-tracked one under a different folder name) — those are returned as conflicts instead of
-    /// being silently adopted, so the caller can prompt the user via <see cref="Dialogs.LocalAddonsDialog"/>.
+    /// Scans for untracked local AddOns folders and resolves each one automatically where there's
+    /// only one sensible answer:
+    ///   * a name that matches no tracked addon is adopted as a new one;
+    ///   * a name that matches exactly one already-tracked addon is merged into it (this is almost
+    ///     always the same addon reappearing as a second folder - a stray copy, or a folder that
+    ///     showed up outside the launcher - not a coincidentally-same-titled different addon), the
+    ///     same way <see cref="AddAsync"/> already merges folder overlaps on install;
+    ///   * a name that matches two or more tracked addons is genuinely ambiguous and is returned as
+    ///     a conflict instead, so the caller can prompt via <see cref="Dialogs.LocalAddonsDialog"/>.
     /// </summary>
     public LocalAddonSyncResult SyncLocalAddons(string wowDir)
     {
         List<LocalAddonCandidate> candidates = ScanForUntracked(wowDir);
         if (candidates.Count == 0)
         {
-            return new LocalAddonSyncResult(0, Array.Empty<LocalAddonCandidate>());
+            return new LocalAddonSyncResult(0, 0, Array.Empty<LocalAddonCandidate>());
         }
 
-        var existingNames = new HashSet<string>(
-            _addons.Select(a => WowColorTextParser.StripCodes(a.Name)),
-            StringComparer.OrdinalIgnoreCase);
+        var byName = _addons
+            .GroupBy(a => WowColorTextParser.StripCodes(a.Name), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
 
         var conflicts = new List<LocalAddonCandidate>();
         int adopted = 0;
+        int merged = 0;
 
         foreach (LocalAddonCandidate candidate in candidates)
         {
             string candidateName = WowColorTextParser.StripCodes(
                 string.IsNullOrEmpty(candidate.Title) ? candidate.FolderName : candidate.Title);
 
-            if (existingNames.Contains(candidateName))
+            if (byName.TryGetValue(candidateName, out List<InstalledAddon>? matches))
             {
-                conflicts.Add(candidate);
+                if (matches.Count > 1)
+                {
+                    conflicts.Add(candidate);
+                    continue;
+                }
+
+                InstalledAddon addon = matches[0];
+                if (!addon.Folders.Contains(candidate.FolderName, StringComparer.OrdinalIgnoreCase))
+                {
+                    addon.Folders.Add(candidate.FolderName);
+                    merged++;
+                }
+
                 continue;
             }
 
-            AdoptCore(candidate);
-            existingNames.Add(candidateName);
+            InstalledAddon adoptedAddon = AdoptCore(candidate);
+            byName[candidateName] = new List<InstalledAddon> { adoptedAddon };
             adopted++;
         }
 
-        if (adopted > 0)
+        if (adopted > 0 || merged > 0)
         {
             Save(wowDir);
         }
 
-        return new LocalAddonSyncResult(adopted, conflicts);
+        return new LocalAddonSyncResult(adopted, merged, conflicts);
     }
 
     /// <summary>Start tracking a folder that's already installed, without downloading anything.</summary>
@@ -330,6 +383,79 @@ public sealed class AddonLibrary
         _addons.Add(addon);
         _log.Info($"Adopted local addon '{WowColorTextParser.StripCodes(addon.Name)}' ({candidate.FolderName}).");
         return addon;
+    }
+
+    public enum RenameFolderOutcome
+    {
+        Success,
+        InvalidName,
+        Collision,
+        MoveFailed,
+    }
+
+    /// <summary>
+    /// Renames one of an addon's installed folders on disk, and records the rename so a future
+    /// install/update (see <see cref="AddAsync"/> and <c>AddonInstaller.InstallFromDirectory</c>)
+    /// keeps writing to the renamed name instead of recreating the canonical one. <see cref="
+    /// InstalledAddon.SourceRef"/> is untouched, so update-checking keeps comparing against the same
+    /// remote regardless of the rename.
+    /// </summary>
+    public RenameFolderOutcome RenameFolder(InstalledAddon addon, string oldFolder, string newFolderName, string wowDir)
+    {
+        string trimmed = newFolderName.Trim();
+        if (trimmed.Length == 0 || trimmed.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            return RenameFolderOutcome.InvalidName;
+        }
+
+        if (string.Equals(trimmed, oldFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            return RenameFolderOutcome.Success; // no-op
+        }
+
+        string addonsDir = AddonPaths.AddOnsDir(wowDir);
+        string oldPath = Path.Combine(addonsDir, oldFolder);
+        string newPath = Path.Combine(addonsDir, trimmed);
+
+        bool collides = Directory.Exists(newPath) ||
+            _addons.Any(a => !ReferenceEquals(a, addon) && a.Folders.Contains(trimmed, StringComparer.OrdinalIgnoreCase));
+        if (collides)
+        {
+            return RenameFolderOutcome.Collision;
+        }
+
+        if (!Directory.Exists(oldPath))
+        {
+            return RenameFolderOutcome.MoveFailed;
+        }
+
+        try
+        {
+            Directory.Move(oldPath, newPath);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"Failed to rename addon folder '{oldFolder}' to '{trimmed}': {ex.Message}");
+            return RenameFolderOutcome.MoveFailed;
+        }
+
+        int index = addon.Folders.FindIndex(f => string.Equals(f, oldFolder, StringComparison.OrdinalIgnoreCase));
+        if (index >= 0)
+        {
+            addon.Folders[index] = trimmed;
+        }
+
+        // Keyed by the canonical (repo/.toc-derived) name, not whatever the folder was previously
+        // renamed to, so a second rename still resolves back to the one original canonical entry
+        // instead of accumulating a rename chain that InstallFromDirectory can't follow.
+        string canonical = addon.FolderRenames
+            .FirstOrDefault(kv => string.Equals(kv.Value, oldFolder, StringComparison.OrdinalIgnoreCase)).Key
+            ?? oldFolder;
+        addon.FolderRenames[canonical] = trimmed;
+
+        Save(wowDir);
+        _log.Info($"Renamed addon folder '{oldFolder}' to '{trimmed}'.");
+        return RenameFolderOutcome.Success;
     }
 
     /// <summary>
