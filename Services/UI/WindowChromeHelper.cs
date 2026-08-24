@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 using TeronWoWLauncher.Native;
 
 namespace TeronWoWLauncher.Services.UI;
@@ -28,18 +29,19 @@ public static class WindowChromeHelper
         window.SourceInitialized += (_, _) =>
         {
             IntPtr handle = new WindowInteropHelper(window).Handle;
-            HwndSource.FromHwnd(handle)?.AddHook(WindowProc);
+            HwndSource.FromHwnd(handle)?.AddHook((IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+                => WindowProc(window, hwnd, msg, wParam, lParam, ref handled));
         };
     }
 
-    private static IntPtr WindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    private static IntPtr WindowProc(Window window, IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         const int WM_GETMINMAXINFO = 0x0024;
         const int WM_NCCALCSIZE = 0x0083;
 
         if (msg == WM_GETMINMAXINFO)
         {
-            ApplyMaximizedWorkAreaBounds(hwnd, lParam);
+            ApplyMaximizedWorkAreaBounds(window, hwnd, lParam);
             handled = true;
         }
         else if (msg == WM_NCCALCSIZE && wParam != IntPtr.Zero && WindowMetrics.IsZoomed(hwnd))
@@ -50,7 +52,7 @@ public static class WindowChromeHelper
         return IntPtr.Zero;
     }
 
-    private static void ApplyMaximizedWorkAreaBounds(IntPtr hwnd, IntPtr lParam)
+    private static void ApplyMaximizedWorkAreaBounds(Window window, IntPtr hwnd, IntPtr lParam)
     {
         IntPtr monitor = WindowMetrics.MonitorFromWindow(hwnd, WindowMetrics.MONITOR_DEFAULTTONEAREST);
         if (monitor == IntPtr.Zero)
@@ -74,6 +76,26 @@ public static class WindowChromeHelper
         mmi.ptMaxSize.Y = workArea.Bottom - workArea.Top;
         mmi.ptMaxTrackSize.X = mmi.ptMaxSize.X;
         mmi.ptMaxTrackSize.Y = mmi.ptMaxSize.Y;
+
+        // WPF's own default WM_GETMINMAXINFO handling (which normally applies Window.MinWidth/
+        // MinHeight to ptMinTrackSize) never gets a chance to run - `handled = true` in WindowProc
+        // short-circuits it, since this hook (added via HwndSource.AddHook) runs ahead of WPF's own
+        // internal window procedure. Without setting it here too, ptMinTrackSize stays at whatever
+        // was already in the (uninitialized) marshaled struct - effectively no minimum at all, which
+        // is exactly what let the window shrink far below the declared MinWidth/MinHeight and badly
+        // break the 3-column Home layout. DPI-scaled since Win32 message coordinates are physical
+        // pixels while MinWidth/MinHeight are 96-DPI-relative WPF units.
+        DpiScale dpi = VisualTreeHelper.GetDpi(window);
+        if (window.MinWidth > 0)
+        {
+            mmi.ptMinTrackSize.X = (int)Math.Ceiling(window.MinWidth * dpi.DpiScaleX);
+        }
+
+        if (window.MinHeight > 0)
+        {
+            mmi.ptMinTrackSize.Y = (int)Math.Ceiling(window.MinHeight * dpi.DpiScaleY);
+        }
+
         Marshal.StructureToPtr(mmi, lParam, true);
     }
 

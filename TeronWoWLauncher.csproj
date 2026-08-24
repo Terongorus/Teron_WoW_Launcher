@@ -23,8 +23,8 @@
     <Product>Teron WoW Launcher (TWL)</Product>
     <Company>Teronverse</Company>
     <Authors>Kaloyan Kolev</Authors>
-    <Version>2.0.0-beta.3</Version>
-    <!-- Keep AssemblyInformationalVersion clean ("2.0.0-beta.3", not "2.0.0-beta.3+<gitsha>"). -->
+    <Version>2.0.0-beta.4</Version>
+    <!-- Keep AssemblyInformationalVersion clean ("2.0.0-beta.4", not "2.0.0-beta.4+<gitsha>"). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 
     <!-- Shown in Explorer/taskbar/Alt+Tab (and used as MainWindow's own icon below, since the

@@ -15,6 +15,23 @@ namespace TeronWoWLauncher.Services.Launch;
 public enum BackupIntegrityStatus { Ok, Mismatch }
 
 /// <summary>
+/// Thrown by <see cref="LaunchOrchestrator"/> when a pristine backup can't be established because
+/// WoW.exe's bytes don't match any fingerprint the resolved Client identifier's catalog expects -
+/// almost always because the wrong identifier (or none) is assigned to the directory, not a code
+/// bug. A distinct type (rather than a plain <see cref="InvalidOperationException"/> the UI would
+/// otherwise have to pattern-match by message) so callers can offer a specific, actionable recovery
+/// (jump to Profile settings) instead of a generic failure toast.
+/// </summary>
+public sealed class ClientIdentifierMismatchException(string profileName, ClientCategory category)
+    : InvalidOperationException(
+        $"WoW.exe doesn't match a pristine baseline for '{profileName}' ({(category == ClientCategory.VanillaPlus ? "Vanilla+" : "Vanilla")}). " +
+        "If this directory actually runs a different client, double-check the Client identifier assigned to it in Profile settings.")
+{
+    public string ProfileName { get; } = profileName;
+    public ClientCategory Category { get; } = category;
+}
+
+/// <summary>
 /// <paramref name="ProcessId"/> is set whenever a game process was actually created, even if a later
 /// step (e.g. auto-login) had trouble — the caller can use it to track "is the game we just launched
 /// still alive" via <see cref="System.Diagnostics.Process.GetProcessById"/>, which is far more
@@ -293,15 +310,13 @@ public sealed class LaunchOrchestrator
             if (!_patch.EnsurePristineBackup(wowDir, catalog))
             {
                 // The specific mismatched-patch detail is already logged by EnsurePristineBackup itself
-                // (PatchService); this message is what actually reaches the user (via a toast - see
+                // (PatchService); this exception is what actually reaches the user (via a dialog - see
                 // ApplyPatchesAsync/OnPatchApplyTick), so it names the most common real cause instead of
                 // just "could not establish a backup": WoW.exe's bytes don't match ANY pristine
                 // fingerprint this catalog knows about, which happens whenever the wrong Client
                 // identifier is assigned to a directory (its category/seed picks the wrong catalog
                 // entirely) - see the Log tab for exactly which patch(es) tripped the check.
-                throw new InvalidOperationException(
-                    $"WoW.exe doesn't match a pristine baseline for '{profile.Name}' ({(profile.Category == ClientCategory.VanillaPlus ? "Vanilla+" : "Vanilla")}). " +
-                    "If this directory actually runs a different client, double-check the Client identifier assigned to it in Profile settings. See the Log tab for details.");
+                throw new ClientIdentifierMismatchException(profile.Name, profile.Category);
             }
 
             // Record the hash only at the moment the backup is actually (re)created — it never

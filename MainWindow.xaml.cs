@@ -717,6 +717,14 @@ public partial class MainWindow : Window
             // and re-showing a toast on every message made a just-closed one reopen moments later.
             await _orchestrator.ApplyPatchesAsync(new Progress<string>(msg => ProgressStatusText.Text = msg));
         }
+        catch (ClientIdentifierMismatchException ex)
+        {
+            // A dialog, not a toast, specifically for this one recoverable case - the user has to
+            // actually go fix the identifier before tweaks can apply at all, so this offers to take
+            // them straight there rather than leaving them to notice/interpret a toast on their own.
+            _log.Error("Patch apply failed: client identifier mismatch.", ex);
+            OfferToFixClientIdentifier(ex.ProfileName, ex.Category);
+        }
         catch (Exception ex)
         {
             // This is an async void timer tick - an unhandled exception here can't be caught by any
@@ -734,6 +742,30 @@ public partial class MainWindow : Window
             MainProgressBar.IsIndeterminate = false;
             ProgressStatusText.Text = string.Empty;
         }
+    }
+
+    /// <summary>Offers to jump the user straight to Profile settings' Client identifier combo when a
+    /// tweak apply failed because the assigned identifier doesn't actually match this directory's
+    /// WoW.exe. Accepting switches to Home and flashes the combo; Cancel does nothing - the tweak
+    /// selection itself is untouched either way (nothing was written to disk on this failure path).</summary>
+    private void OfferToFixClientIdentifier(string profileName, ClientCategory category)
+    {
+        string categoryLabel = category == ClientCategory.VanillaPlus ? "Vanilla+" : "Vanilla";
+        var confirm = new ConfirmDialog(
+            "Client Identifier Mismatch",
+            $"WoW.exe doesn't match a pristine baseline for '{profileName}' ({categoryLabel}). " +
+            "The Client identifier assigned to this profile needs to be set or corrected before " +
+            "tweaks can apply.\n\nOpen Profile settings and fix it now?",
+            confirmText: "Fix It",
+            cancelText: "Cancel");
+        if (ShowModal(confirm) != true)
+        {
+            return;
+        }
+
+        SelectTab(0);
+        ClientIdentifierCombo.BringIntoView();
+        FlashHighlight(ClientIdentifierCombo);
     }
 
     // ---------------- DLLs tab ----------------
@@ -1514,6 +1546,10 @@ public partial class MainWindow : Window
                 }
             }
 
+            // Local disk read only (opens an existing .git folder, no network) - safe here despite
+            // this being the local-only refresh path.
+            _addons.LinkManualAddonsWithGitRemotes(wowDir);
+
             RefreshAddonList();
         }
         catch (Exception ex)
@@ -1805,6 +1841,8 @@ public partial class MainWindow : Window
                     }
                 }
             }
+
+            _addons.LinkManualAddonsWithGitRemotes(wowDir);
 
             ShowToast("Addons", "Checking for addon updates…", ToastSeverity.Info, updateKey: "addon-refresh");
             await _addons.CheckForUpdatesAsync(wowDir);
@@ -2324,6 +2362,7 @@ public partial class MainWindow : Window
         GameFolderBox.Text = s.WowDirectory ?? string.Empty;
         MinimizeOnLaunchCheck.IsChecked = s.MinimizeOnLaunch;
         RefreshRealmlistHistoryItems();
+        SeedDefaultProfileIfNeeded();
         RefreshManagedDirectoryItems();
 
         SeedDefaultClientProfilesIfNeeded();
@@ -2331,6 +2370,43 @@ public partial class MainWindow : Window
         RefreshClientIdentifierCombo();
 
         UpdateGameFolderHint();
+    }
+
+    /// <summary>
+    /// One-time, at startup: if no profile (tracked directory) exists yet, seed one instead of
+    /// leaving the Home tab's Profile list empty until the user notices and clicks Add Profile
+    /// themselves. Prefers whatever the pre-Profiles global WowDirectory already pointed at, if it
+    /// still exists on disk - that's real prior configuration (an upgrade from before this feature
+    /// existed), not something to discard - and only falls back to the launcher's own folder (the
+    /// same default OnAddProfile uses) for a genuinely fresh install with no prior state at all.
+    /// </summary>
+    private void SeedDefaultProfileIfNeeded()
+    {
+        if (_settings.Current.ManagedDirectories.Count > 0)
+        {
+            return;
+        }
+
+        string existing = GameFolderBox.Text.Trim();
+        string defaultDir = !string.IsNullOrWhiteSpace(existing) && Directory.Exists(existing)
+            ? existing
+            : AppContext.BaseDirectory.TrimEnd('\\', '/');
+
+        RecordManagedDirectory(defaultDir);
+        if (string.IsNullOrWhiteSpace(GameFolderBox.Text))
+        {
+            GameFolderBox.Text = defaultDir;
+
+            // GameFolderBox.Text's own TextChanged→ScheduleSettingsSave path no-ops while _loading
+            // is true (see ScheduleSettingsSave), which is exactly the state this only ever runs
+            // in (called from LoadGlobalSettingsIntoUi, itself only called from the constructor's
+            // _loading-guarded startup block) - so nothing else reloads _dirSettings for the newly-
+            // seeded directory the way a real directory switch normally would. Load it explicitly
+            // here so LoadDirectorySettingsIntoUi (which runs moments later in the same startup
+            // sequence) reflects this directory's own settings, not whatever was loaded at
+            // construction for the pre-seeding (possibly empty) WowDirectory.
+            _dirSettings.Load(defaultDir);
+        }
     }
 
     // ---------------- Client Identifiers (global table of known servers/clients) ----------------
@@ -2653,16 +2729,21 @@ public partial class MainWindow : Window
         {
             bool isActive = string.Equals(dir, current, StringComparison.OrdinalIgnoreCase);
 
+            // Active row: full gold border+fill (the app's one consistent "selected" accent -
+            // checkbox fills, focus borders, the nav tab's selected label all use the same
+            // #E6C067) instead of the previous blue-border/gold-fill mismatch, with a thicker
+            // border so it actually reads as selected at a glance rather than blending into the
+            // inactive rows around it.
             var row = new Border
             {
-                BorderThickness = new Thickness(1),
+                BorderThickness = new Thickness(isActive ? 2 : 1),
                 BorderBrush = isActive
-                    ? (Brush)FindResource("InstallActionBrush")
+                    ? new SolidColorBrush(Color.FromRgb(0xE6, 0xC0, 0x67))
                     : new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x42)),
                 // Solid background even when inactive - a fully transparent row was unreadable
                 // against the faint background art showing through the card behind it.
                 Background = isActive
-                    ? new SolidColorBrush(Color.FromArgb(0x33, 0xE6, 0xC0, 0x67))
+                    ? new SolidColorBrush(Color.FromArgb(0x48, 0xE6, 0xC0, 0x67))
                     : new SolidColorBrush(Color.FromRgb(0x23, 0x23, 0x29)),
                 CornerRadius = new CornerRadius(6),
                 Padding = new Thickness(10, 8, 6, 8),
@@ -2674,21 +2755,33 @@ public partial class MainWindow : Window
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
+            // Explicit Foreground/FontSize - a bare TextBlock has no app-wide default style to fall
+            // back on (App.xaml has no global TextBlock style, only named ones like BodyText), so
+            // this was rendering at WPF's own default (black, ~12px) and was nearly invisible
+            // against the dark card.
             var dirText = new TextBlock
             {
                 Text = GetProfileDisplayName(dir),
                 TextWrapping = TextWrapping.Wrap,
                 VerticalAlignment = VerticalAlignment.Center,
                 FontWeight = isActive ? FontWeights.Bold : FontWeights.Normal,
+                FontSize = 15,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xED, 0xED, 0xED)),
                 ToolTip = dir,
             };
             Grid.SetColumn(dirText, 0);
             rowGrid.Children.Add(dirText);
 
+            // Same trash-icon/RemoveActionBrush treatment as the DLL "untrack" and Addon "Remove"
+            // row buttons, instead of the previous unstyled ghost button that didn't match the
+            // rest of the app's icon-button vocabulary.
             var deleteButton = new Button
             {
-                Style = (Style)FindResource("GhostIconButtonStyle"),
-                Content = "",
+                Style = (Style)FindResource("IconButtonStyle"),
+                Content = "",
+                Background = (Brush)FindResource("RemoveActionBrush"),
+                Width = 28,
+                Height = 28,
                 ToolTip = "Remove this profile (untracks the directory only - files on disk are untouched)",
                 VerticalAlignment = VerticalAlignment.Center,
             };

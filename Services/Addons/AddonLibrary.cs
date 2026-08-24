@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using LibGit2Sharp;
 using TeronWoWLauncher.Models;
 using TeronWoWLauncher.Sources;
 
@@ -347,7 +348,7 @@ public sealed class AddonLibrary
                 continue;
             }
 
-            InstalledAddon adoptedAddon = AdoptCore(candidate);
+            InstalledAddon adoptedAddon = AdoptCore(candidate, wowDir);
             byName[candidateName] = new List<InstalledAddon> { adoptedAddon };
             adopted++;
         }
@@ -363,12 +364,12 @@ public sealed class AddonLibrary
     /// <summary>Start tracking a folder that's already installed, without downloading anything.</summary>
     public InstalledAddon Adopt(LocalAddonCandidate candidate, string wowDir)
     {
-        InstalledAddon addon = AdoptCore(candidate);
+        InstalledAddon addon = AdoptCore(candidate, wowDir);
         Save(wowDir);
         return addon;
     }
 
-    private InstalledAddon AdoptCore(LocalAddonCandidate candidate)
+    private InstalledAddon AdoptCore(LocalAddonCandidate candidate, string wowDir)
     {
         var addon = new InstalledAddon
         {
@@ -380,9 +381,116 @@ public sealed class AddonLibrary
             InstalledUtc = DateTime.UtcNow,
         };
 
+        // A folder installed outside the launcher can still be a real git checkout (the user cloned
+        // it in by hand) - the launcher's own GitHub/GitLab installs never leave a ".git" folder
+        // behind (see GitHubAddonSource.CopyWorkingTree), so finding one here means this was adopted,
+        // not installed through us. Link it to its real remote immediately instead of leaving it
+        // stuck as an untrackable "Local" addon forever.
+        string folderPath = Path.Combine(AddonPaths.AddOnsDir(wowDir), candidate.FolderName);
+        if (TryResolveGitRemote(folderPath) is { } git)
+        {
+            addon.SourceKind = git.Kind;
+            addon.SourceRef = git.SourceRef;
+            addon.RemoteVersionSignature = git.HeadSha;
+            _log.Info($"Linked local addon '{WowColorTextParser.StripCodes(addon.Name)}' to its git remote ({git.SourceRef}).");
+        }
+
         _addons.Add(addon);
         _log.Info($"Adopted local addon '{WowColorTextParser.StripCodes(addon.Name)}' ({candidate.FolderName}).");
         return addon;
+    }
+
+    /// <summary>
+    /// Re-checks every already-tracked Manual addon's own folder for a resolvable git remote that
+    /// wasn't linked at adoption time (adopted before this detection existed, or the user ran
+    /// `git init`/added a remote to an existing manual folder afterward). Upgrades SourceKind/
+    /// SourceRef/RemoteVersionSignature in place; never touches an addon already tracked through a
+    /// real source. Pure local disk I/O (opens the existing ".git" folder, no network) - safe to run
+    /// from the local-only refresh path as well as the full one.
+    /// </summary>
+    public bool LinkManualAddonsWithGitRemotes(string wowDir)
+    {
+        bool changed = false;
+        string addonsDir = AddonPaths.AddOnsDir(wowDir);
+
+        foreach (InstalledAddon addon in _addons)
+        {
+            if (addon.SourceKind != AddonSourceKind.Manual)
+            {
+                continue;
+            }
+
+            string? folder = addon.Folders.FirstOrDefault();
+            if (folder is null || TryResolveGitRemote(Path.Combine(addonsDir, folder)) is not { } git)
+            {
+                continue;
+            }
+
+            addon.SourceKind = git.Kind;
+            addon.SourceRef = git.SourceRef;
+            addon.RemoteVersionSignature = git.HeadSha;
+            changed = true;
+            _log.Info($"Linked previously-manual addon '{WowColorTextParser.StripCodes(addon.Name)}' to its git remote ({git.SourceRef}).");
+        }
+
+        if (changed)
+        {
+            Save(wowDir);
+        }
+
+        return changed;
+    }
+
+    private static readonly Regex GitHubRemoteUrlRegex =
+        new(@"github\.com[:/](?<owner>[^/\s]+)/(?<repo>[^/\s]+?)(?:\.git)?/?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex GitLabRemoteUrlRegex =
+        new(@"gitlab\.com[:/](?<path>[^\s]+?)(?:\.git)?/?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Reads a local addon folder's own ".git" checkout (if it has one) and, if its "origin" remote
+    /// points at a host this app already knows how to track (github.com/gitlab.com), returns the
+    /// same SourceKind/SourceRef shape <see cref="AddAsync"/> would have stored for a normal tracked
+    /// install - plus the commit currently checked out as the immediate RemoteVersionSignature
+    /// baseline, so the very first update check compares against reality instead of null (which
+    /// would otherwise read as "always outdated" for GitLab - see CheckForUpdatesAsync's GitHub-only
+    /// null/format migration branch, which a fresh git-linked addon isn't going through).
+    /// </summary>
+    private static (AddonSourceKind Kind, string SourceRef, string HeadSha)? TryResolveGitRemote(string addonDir)
+    {
+        if (!Repository.IsValid(addonDir))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var repo = new Repository(addonDir);
+            string? remoteUrl = repo.Network.Remotes["origin"]?.Url;
+            string? headSha = repo.Head.Tip?.Sha;
+            if (string.IsNullOrWhiteSpace(remoteUrl) || string.IsNullOrWhiteSpace(headSha))
+            {
+                return null;
+            }
+
+            Match gh = GitHubRemoteUrlRegex.Match(remoteUrl);
+            if (gh.Success)
+            {
+                return (AddonSourceKind.GitHub, $"https://github.com/{gh.Groups["owner"].Value}/{gh.Groups["repo"].Value}", headSha);
+            }
+
+            Match gl = GitLabRemoteUrlRegex.Match(remoteUrl);
+            if (gl.Success)
+            {
+                return (AddonSourceKind.GitLab, $"https://gitlab.com/{gl.Groups["path"].Value}", headSha);
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Debug($"Could not read git remote info for '{addonDir}': {ex.Message}");
+            return null;
+        }
     }
 
     public enum RenameFolderOutcome

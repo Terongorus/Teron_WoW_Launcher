@@ -65,6 +65,13 @@ public static class PatchCatalog
     private static readonly byte[] TurtleFrilldistanceBefore = { 0x00, 0x00, 0x96, 0x43 }; // 300 yds
     private static readonly byte[] OctoWowFarclipBefore = { 0x00, 0x80, 0x3B, 0x45 }; // 3000 yds
 
+    // Read directly from a real TurtleWoW WoW.exe (2026-08-24) that otherwise matched every other
+    // TurtleWoW fingerprint exactly (fov/farclip/frilldistance/nameplate/signature-removal) - this
+    // build ships CameraDistanceMax already raised to 100, contradicting the class doc comment's
+    // original "max-camera-distance is untouched on both clients" claim. Accepted as a genuine
+    // TurtleWoW baseline rather than assumed tampering, matching the farclip/frilldistance pattern.
+    private static readonly byte[] TurtleMaxCameraBefore = { 0x00, 0x00, 0xC8, 0x42 }; // 100 yds
+
     // Confirmed identical on both TurtleWoW and OctoWoW (read directly from each client's own
     // WoW.exe) - both ship with FoV/nameplate already raised to their patched values, so both share
     // one constant rather than needing a per-client variant like farclip/frilldistance above.
@@ -259,10 +266,16 @@ public static class PatchCatalog
             "this client ships at 41).",
             0x40C448, new[] { VanillaNameplateBefore, CommunityNameplateBefore }, min: 20, max: 41, def: 41, unit: "yds"));
 
+        List<byte[]> maxCameraBefore = new() { VanillaMaxCameraBefore };
+        if (profileId == ClientProfile.TurtleWowSeedId)
+        {
+            maxCameraBefore.Add(TurtleMaxCameraBefore);
+        }
+
         list.Add(FloatTweak("max-camera-distance", "Max camera distance limit",
             "Raises the CameraDistanceMax ceiling (game default 50). After enabling, set it in-game " +
             "with /console CameraDistanceMax.",
-            0x4089A4, new[] { VanillaMaxCameraBefore }, min: 15, max: 125, def: 100, unit: "yds"));
+            0x4089A4, maxCameraBefore.ToArray(), min: 15, max: 125, def: 100, unit: "yds"));
 
         list.Add(SoundChannels());
 

@@ -6,7 +6,7 @@
         xmlns:svc="clr-namespace:TeronWoWLauncher.Services.UI"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         mc:Ignorable="d" x:Class="TeronWoWLauncher.MainWindow"
-        Height="700" Width="980" MinHeight="540" MinWidth="820"
+        Height="700" Width="980" MinHeight="600" MinWidth="900"
         WindowStartupLocation="CenterScreen"
         Icon="game.ico"
         Background="#1B1B1F">
@@ -522,21 +522,18 @@
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <!-- Heading + "Add Profile" share the title row (same row height as the other two
-                 columns' plain headings) so the button sits right where the list starts, not
-                 stranded below it. -->
+            <!-- Heading + an icon-only "Add" button share the title row, matching the DLL/MPQ
+                 Patches/Addons tabs' own toolbar convention (icon button, colored via
+                 AddActionBrush, tooltip carries the label) instead of a plain text button. -->
             <Grid Grid.Row="0" Margin="0,0,0,16">
               <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
               </Grid.ColumnDefinitions>
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-              </Grid.RowDefinitions>
               <TextBlock Grid.Column="0" Style="{StaticResource Heading2Text}" Text="Profiles" VerticalAlignment="Center"/>
-              <Button Grid.Column="0" Grid.Row="1" x:Name="AddProfileButton" Content="Add Profile"
-                      Click="OnAddProfile" VerticalAlignment="Center" Margin="0,10,0,0"/>
+              <Button Grid.Column="1" x:Name="AddProfileButton" Style="{StaticResource IconButtonStyle}"
+                      Content="&#xE710;" Background="{StaticResource AddActionBrush}"
+                      Click="OnAddProfile" VerticalAlignment="Center" ToolTip="Add a new profile"/>
             </Grid>
 
             <!-- Solid card container (matches the Readme/Changelog box styling below) so rows read

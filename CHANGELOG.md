@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [2.0.0-beta.4] - 2026-08-24
+
+### Added
+
+- Local ("Manual") addon folders with a real `.git` checkout are now automatically linked to their
+  GitHub/GitLab remote on Refresh — enabling update checks for addons you cloned in by hand instead
+  of leaving them permanently untrackable. Checked for already-tracked folders too, not just
+  newly-discovered ones, so an addon adopted before this existed (or one you added a remote to
+  afterward) still gets picked up.
+
+### Changed
+
+- Toggling a tweak against a mismatched Client identifier now shows a dialog explaining the
+  problem, with a one-click "Fix It" that jumps straight to the Client identifier dropdown in
+  Profile settings, instead of a toast.
+- The Profile list's Add/Remove controls now match the icon-button style already used on the
+  DLLs/MPQ Patches/Addons tabs (a colored add icon, a colored trash icon) instead of a plain text
+  button and an unstyled "×".
+- The active/selected profile row's highlight is now a single consistent gold accent (border +
+  fill), replacing a mismatched blue border with a gold fill.
+- The launcher window's enforced minimum size is now 900×600 (was 820×540).
+
+### Fixed
+
+- A launcher with no tracked WoW directories yet (a brand-new install) showed an empty Profile list
+  until the user noticed and clicked Add Profile themselves; a default profile — pointed at the
+  launcher's own folder, or an existing pre-Profiles installation directory if one was already
+  configured — is now seeded automatically.
+- The custom window-chrome fix for the maximize-overhang bug was silently preventing WPF's own
+  MinWidth/MinHeight enforcement from ever running, letting the window shrink far below its
+  declared minimum size and badly break the 3-column Home layout.
+- The Profile list's row text was rendering at WPF's own default styling (black, ~12px) instead of
+  the app's theme, since a bare TextBlock has no app-wide default style to fall back on — nearly
+  invisible against the dark background.
+- TurtleWoW's max-camera-distance tweak could incorrectly report a client as "already patched" and
+  refuse to establish a pristine backup, on TurtleWoW builds that ship CameraDistanceMax already
+  raised to 100 instead of the previously-assumed 50.
+
 ## [2.0.0-beta.3] - 2026-08-24
 
 ### Added
