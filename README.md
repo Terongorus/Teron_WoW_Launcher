@@ -167,6 +167,19 @@ own code.
 Version 2.0.0-beta.5. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
+## Potential future features
+
+Ideas that have been scoped out but not committed to:
+
+- **Project Reforged HD patch, native install/update** — [Project Reforged](https://projectreforged.github.io/vanilla/downloads/turtle/)
+  ([Kronos variant](https://projectreforged.github.io/vanilla/downloads/kronos/)) ships its
+  lettered MPQ patches under the same `patch-A.mpq` … `patch-U.mpq` naming this launcher's own
+  MPQ Patches tab already scans for, which would make one-click install/update a natural fit.
+  Deferred before implementation started, pending decisions on scope (core patches only vs. also
+  the bundled DXVK renderer/patched `WoW.exe`/VanillaFixes), how OctoWoW profiles map to a client
+  Reforged doesn't explicitly publish for, and whether the L/T slot's alternate aesthetic variants
+  need a picker in the UI.
+
 ## License
 
 [GNU General Public License v3.0](LICENSE.txt).
