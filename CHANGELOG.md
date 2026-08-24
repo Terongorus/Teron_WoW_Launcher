@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [2.0.0-beta.5] - 2026-08-25
+
+### Changed
+
+- The Tweaks/DLLs/MPQ Patches/Addons/Settings page card and the Home tab's three column margins now
+  scale with the window's own width instead of using fixed values everywhere. Below roughly 1160px
+  wide, both look exactly as before (the page card stays capped at 720px, Home's margins stay at
+  50/40); above that, the page card grows up to 1400px so a maximized window on a large or ultrawide
+  monitor doesn't strand its content in a wall of empty side margins, and Home's margins shrink down
+  toward 20/16 as the window approaches the enforced 900px minimum, giving the three columns more
+  usable width right where it was tightest.
+- Trimmed the MPQ Patches and Addons tab description text (split one run-on note into two lines on
+  MPQ Patches, dropped a redundant sentence on Addons) and gave Repair Game Files its own accent
+  color, matching Delete Game Files' existing treatment.
+
 ## [2.0.0-beta.4] - 2026-08-24
 
 ### Added

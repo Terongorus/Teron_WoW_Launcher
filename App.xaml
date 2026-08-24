@@ -3,8 +3,11 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:markdig="clr-namespace:Markdig.Wpf;assembly=Markdig.Wpf"
              xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+             xmlns:svc="clr-namespace:TeronWoWLauncher.Services.UI"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
+        <svc:ResponsiveCardWidthConverter x:Key="ResponsiveCardWidth"/>
+        <svc:ResponsiveColumnMarginConverter x:Key="ResponsiveColumnMargin"/>
         <!--
           The app's whole text hierarchy, in one place: one dedicated size/weight/color per role,
           used identically on every tab and dialog instead of each screen inventing its own
@@ -69,15 +72,17 @@
         </Style>
 
         <!--
-          Shared page-card look for a tab's content: a fixed-width, horizontally centered dark card, so
-          content reads as one consistent column instead of stretching edge-to-edge when the window is
-          maximized. Tweaks and Settings apply this directly to their one root Border; MPQ Patches and
-          Addons use the split PageCardTopStyle/PageCardBottomStyle pair below instead (they need a
-          pinned header above a separately-scrollable list). DLLs isn't part of this family — it's a
-          genuinely wide side-by-side browse layout, not a narrow form, so it intentionally stays
-          full-width; Log needs the pinned-header-over-list split but also needs real width (long
-          timestamps/messages/stack traces), so it uses the WideCardTopStyle/WideCardBottomStyle pair
-          further below instead — same split structure and visual treatment, no MaxWidth cap.
+          Shared page-card look for a tab's content: a horizontally centered dark card whose MaxWidth
+          scales off the window's own width (ResponsiveCardWidthConverter) instead of a fixed 720px,
+          so content reads as one consistent column on typical window sizes but doesn't strand itself
+          in a sea of empty side margins when the window is maximized on a large/ultrawide monitor.
+          Tweaks, Settings, and DLLs apply this directly to their one root Border (DLLs pins column 1
+          to the standalone scrollbar's width instead of using Padding for it — see its own tab XAML);
+          MPQ Patches and Addons use the split PageCardTopStyle/PageCardBottomStyle pair below instead
+          (they need a pinned header above a separately-scrollable list). Log needs that same pinned-
+          header-over-list split but also needs real width (long timestamps/messages/stack traces), so
+          it uses the WideCardTopStyle/WideCardBottomStyle pair further below instead — same split
+          structure and visual treatment, no MaxWidth cap.
 
           HorizontalAlignment is Stretch, not Center: Stretch makes the Border fill the width its
           parent offers, and MaxWidth then clips that down to the cap — at which point WPF centers the
@@ -86,7 +91,12 @@
           different width depending on what that tab happens to contain.
         -->
         <Style x:Key="PageCardStyle" TargetType="{x:Type Border}">
-            <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="MaxWidth">
+                <Setter.Value>
+                    <Binding RelativeSource="{RelativeSource AncestorType={x:Type Window}}"
+                             Path="ActualWidth" Converter="{StaticResource ResponsiveCardWidth}"/>
+                </Setter.Value>
+            </Setter>
             <Setter Property="Margin" Value="24"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
             <Setter Property="Background" Value="#101014"/>
@@ -113,7 +123,12 @@
           can never drift between Top and Bottom regardless of how wide the real scrollbar renders).
         -->
         <Style x:Key="PageCardTopStyle" TargetType="{x:Type Border}">
-            <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="MaxWidth">
+                <Setter.Value>
+                    <Binding RelativeSource="{RelativeSource AncestorType={x:Type Window}}"
+                             Path="ActualWidth" Converter="{StaticResource ResponsiveCardWidth}"/>
+                </Setter.Value>
+            </Setter>
             <Setter Property="Margin" Value="24,24,24,0"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
             <Setter Property="Background" Value="#101014"/>
@@ -123,7 +138,12 @@
             <Setter Property="Padding" Value="24,24,24,16"/>
         </Style>
         <Style x:Key="PageCardBottomStyle" TargetType="{x:Type Border}">
-            <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="MaxWidth">
+                <Setter.Value>
+                    <Binding RelativeSource="{RelativeSource AncestorType={x:Type Window}}"
+                             Path="ActualWidth" Converter="{StaticResource ResponsiveCardWidth}"/>
+                </Setter.Value>
+            </Setter>
             <Setter Property="Margin" Value="24,0,24,24"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
             <Setter Property="VerticalAlignment" Value="Top"/>

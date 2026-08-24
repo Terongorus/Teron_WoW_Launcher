@@ -472,8 +472,12 @@
 
           <!-- Left: How to use. Fills the column's real height (no outer page scroll here), split
                evenly between the two previews. Each preview clips rather than scrolling internally —
-               click anywhere on one to open it full-size in a dedicated dialog. -->
-          <Grid Grid.Column="0" Margin="50,40,50,40">
+               click anywhere on one to open it full-size in a dedicated dialog. Margin scales off the
+               window's own width (ResponsiveColumnMarginConverter) instead of a fixed 50,40,50,40 —
+               that fixed margin was a hard floor eating into content width right at the enforced
+               MinWidth, so all three columns share this same responsive binding. -->
+          <Grid Grid.Column="0"
+                Margin="{Binding RelativeSource={RelativeSource AncestorType={x:Type Window}}, Path=ActualWidth, Converter={StaticResource ResponsiveColumnMargin}}">
             <Grid.ColumnDefinitions>
                   <ColumnDefinition Width="*"/>
                   <ColumnDefinition Width="*"/>
@@ -515,8 +519,10 @@
                ManagedDirectories) with its own name/realmlist/client identifier/login delay/WDB toggle
                (DirectorySettings) - clicking a row switches to it (same mechanism the old
                DirectorySwitchBox used); its fields are then edited directly in the "Profile settings"
-               column to the right, no separate dialog. -->
-          <Grid Grid.Column="2" Margin="50,40,50,40">
+               column to the right, no separate dialog. Margin: see the left column's own comment on
+               ResponsiveColumnMarginConverter. -->
+          <Grid Grid.Column="2"
+                Margin="{Binding RelativeSource={RelativeSource AncestorType={x:Type Window}}, Path=ActualWidth, Converter={StaticResource ResponsiveColumnMargin}}">
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
@@ -552,8 +558,10 @@
           <!-- Right: Profile settings for whichever profile is currently selected, plus Login. Heading
                stays fixed in its own Auto row (same Margin as the other two columns' Grids), and only
                the field content below it scrolls - so all three column titles line up on the same row
-               regardless of how much the selected profile's content overflows. -->
-          <Grid Grid.Column="4" Margin="50,40,50,40">
+               regardless of how much the selected profile's content overflows. Margin: see the left
+               column's own comment on ResponsiveColumnMarginConverter. -->
+          <Grid Grid.Column="4"
+                Margin="{Binding RelativeSource={RelativeSource AncestorType={x:Type Window}}, Path=ActualWidth, Converter={StaticResource ResponsiveColumnMargin}}">
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
@@ -793,11 +801,8 @@
             <StackPanel>
               <TextBlock Style="{StaticResource Heading2Text}" Text="Custom MPQ Patches" TextAlignment="Center" Margin="0,0,0,20"/>
                   <TextBlock Style="{StaticResource Heading3Text}" Text="Tracked MPQ patches"/>
-                  <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,8"
-                         Text="The MPQ patches are stored in .\Data\(patch-A.mpq … patch-Z.mpq). Uncheck to disable (renames to _patch-X.mpq).
-                             Base Blizzard patches are not shown!"
-                         TextWrapping="Wrap"
-                             />
+                  <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,0" Text="The MPQ patches are stored in .\Data\(patch-A.mpq … patch-Z.mpq). Uncheck to disable (renames to _patch-X.mpq)." TextWrapping="Wrap"/>
+                  <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,8" Text="Base Blizzard patches are not shown!" TextWrapping="Wrap"/>
               <Grid>
                 <Grid.ColumnDefinitions>
                   <ColumnDefinition Width="*"/>
@@ -921,8 +926,7 @@
                     </Grid.RowDefinitions>
                     <TextBlock Style="{StaticResource MicroText}"
                         Margin="0,0,0,4"
-                        Text="Add by GitHub/GitLab repo URL, a Legacy-WoW or Warperia addon page URL, a direct archive URL, or a local .zip/.rar/.7z file.
-                               Addons are installed into .\Interface\AddOns\(AddonFolder)."
+                        Text="Add by GitHub/GitLab repo URL, a Legacy-WoW or Warperia addon page URL, a direct archive URL, or a local .zip/.rar/.7z file."
                         Grid.Row="0"
                         Grid.ColumnSpan="2"
                         TextAlignment="Center"
@@ -1216,7 +1220,7 @@
               <TextBlock Style="{StaticResource MicroText}" Margin="0,0,0,4" TextWrapping="Wrap"
                          Text="Applies to whichever profile is currently selected on Home."/>
               <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,0,0,4">
-                <Button x:Name="RepairGameFilesButton" Content="Repair Game Files" Click="OnRepairGameFiles"/>
+                <Button x:Name="RepairGameFilesButton" Content="Repair Game Files" Click="OnRepairGameFiles" Background="{StaticResource UpdateActionBrush}"/>
                 <Button x:Name="DeleteGameFilesButton" Content="Delete Game Files" Click="OnDeleteGameFiles" Margin="8,0,0,0"
                         Background="{StaticResource RemoveActionBrush}"/>
               </StackPanel>
