@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="Install Vanilla Client" Height="250" Width="520"
+        Title="Install Vanilla Client" Height="280" Width="520"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
         Background="#1B1B1F">
 
@@ -34,7 +34,7 @@
                 <TextBlock Grid.Row="0" Style="{StaticResource Heading2Text}" Text="Install the World of Warcraft 1.12.1 client"
                            Margin="0,0,0,6"/>
                 <TextBlock Grid.Row="1" Style="{StaticResource MicroText}"
-                           Text="Choose a folder. It becomes your WoW home directory — the launcher, the client, and everything it manages will live there."
+                           Text="Choose a folder. The client and everything this installation manages (addons, tweaks, DLLs) will live there — the launcher itself doesn't need to be inside it, and can manage other installations too."
                            TextWrapping="Wrap" Margin="0,0,0,14"/>
 
                 <DockPanel Grid.Row="2">

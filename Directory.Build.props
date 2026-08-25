@@ -1,0 +1,29 @@
+<Project>
+  <PropertyGroup>
+    <!--
+      $(_TargetAssemblyProjectName) is only ever set while the WPF markup compiler is building its
+      own throwaway "*_wpftmp.csproj" temporary project (used to resolve x:Class/type references
+      during MarkupCompilePass1/2) - it holds the REAL project's name, while $(MSBuildProjectName)
+      at that point is the randomly-suffixed temp project's own name instead. Parameterizing the
+      relocated Build\ paths below on that random name would create a brand-new, uniquely-named,
+      empty output folder under Build\ on every single build - WPF's own temp-project cleanup
+      doesn't know to look in a relocated path, so it never gets removed, and the random suffix
+      means a fresh one appears each time rather than reusing the last one. Collapsing it to one
+      fixed, reused name keeps this sub-build fully contained to a single static, already-gitignored
+      folder inside Build\ instead - one harmless empty folder that gets reused, not one more
+      accumulating every time you build.
+    -->
+    <_BuildDirProjectName>$(MSBuildProjectName)</_BuildDirProjectName>
+    <_BuildDirProjectName Condition="'$(_TargetAssemblyProjectName)' != ''">_WpfTempAssembly</_BuildDirProjectName>
+  </PropertyGroup>
+  <PropertyGroup>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)Build\$(Configuration)\$(_BuildDirProjectName)\</BaseOutputPath>
+    <OutputPath>$(BaseOutputPath)</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+
+    <PublishDir>$(MSBuildThisFileDirectory)Build\Publish\$(_BuildDirProjectName)\$(RuntimeIdentifier)\</PublishDir>
+
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)Build\obj\$(_BuildDirProjectName)\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

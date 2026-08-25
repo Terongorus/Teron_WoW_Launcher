@@ -3,7 +3,12 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Navigation;
-using TeronWoWLauncher.Services;
+using TeronWoWLauncher.Services.Addons;
+using TeronWoWLauncher.Services.Core;
+using TeronWoWLauncher.Services.Dlls;
+using TeronWoWLauncher.Services.Launch;
+using TeronWoWLauncher.Services.Patching;
+using TeronWoWLauncher.Services.UI;
 
 namespace TeronWoWLauncher.Dialogs;
 
@@ -15,16 +20,20 @@ namespace TeronWoWLauncher.Dialogs;
 /// </summary>
 public partial class AddonDetailsDialog : Window
 {
-    public AddonDetailsDialog(string title, string markdown, bool ignoreUpdates, string? repoUrl = null)
+    public AddonDetailsDialog(string title, string markdown, bool ignoreUpdates, string? repoUrl = null, bool showIgnoreUpdates = true, string repoLinkLabel = "View on GitHub")
     {
         InitializeComponent();
         Title = title;
         Viewer.Markdown = markdown;
         IgnoreUpdatesCheck.IsChecked = ignoreUpdates;
+        // Browse results aren't tracked addons yet - "ignore updates" has nothing to apply to until
+        // one is actually installed, so that checkbox is hidden rather than shown-but-meaningless.
+        IgnoreUpdatesCheck.Visibility = showIgnoreUpdates ? Visibility.Visible : Visibility.Collapsed;
 
         if (repoUrl is not null && Uri.TryCreate(repoUrl, UriKind.Absolute, out Uri? uri))
         {
             RepoLink.NavigateUri = uri;
+            RepoLinkRun.Text = repoLinkLabel;
             RepoLinkText.Visibility = Visibility.Visible;
         }
 

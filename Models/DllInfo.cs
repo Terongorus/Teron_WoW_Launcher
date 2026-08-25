@@ -10,6 +10,12 @@ public sealed class DllInfo
     public string? Author { get; init; }
     public string? Description { get; init; }
 
+    /// <summary>True when this entry is currently in dlls.txt (injected on launch); false when it was
+    /// only found sitting in the game folder. Drives the merged DLLs-tab list's grouping and each
+    /// row's track/untrack and ignore buttons - purely a UI-facing flag, not persisted anywhere
+    /// itself (dlls.txt's own contents are what's authoritative).</summary>
+    public bool IsTracked { get; init; }
+
     /// <summary>
     /// Version/author/description joined for the list row, omitting whatever wasn't found — many
     /// small hand-built DLLs (exactly the kind this launcher injects) don't carry a full version

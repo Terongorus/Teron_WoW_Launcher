@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Media;
 
 namespace TeronWoWLauncher.Dialogs;
 
@@ -8,13 +9,26 @@ namespace TeronWoWLauncher.Dialogs;
 /// </summary>
 public partial class ConfirmDialog : Window
 {
-    public ConfirmDialog(string title, string message, string confirmText = "Yes", string cancelText = "No")
+    /// <param name="confirmBrush">
+    /// ConfirmButton's color. Defaults to the shared "positive action" green (AddActionBrush) - most
+    /// callers use confirmText for the primary/proceed action. Pass RemoveActionBrush explicitly for
+    /// dialogs where confirmText is itself the destructive choice (e.g. "Cancel Download").
+    /// </param>
+    /// <param name="cancelBrush">CancelButton's color. Null keeps its plain default app-wide button style.</param>
+    public ConfirmDialog(string title, string message, string confirmText = "Yes", string cancelText = "No",
+        Brush? confirmBrush = null, Brush? cancelBrush = null)
     {
         InitializeComponent();
         TitleText.Text = title;
         MessageText.Text = message;
         ConfirmButton.Content = confirmText;
         CancelButton.Content = cancelText;
+        ConfirmButton.Background = confirmBrush ?? (Brush)FindResource("AddActionBrush");
+        if (cancelBrush is not null)
+        {
+            CancelButton.Background = cancelBrush;
+            CancelButton.BorderThickness = new Thickness(0);
+        }
     }
 
     private void OnConfirm(object sender, RoutedEventArgs e) => DialogResult = true;

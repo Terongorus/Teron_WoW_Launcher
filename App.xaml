@@ -3,8 +3,11 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:markdig="clr-namespace:Markdig.Wpf;assembly=Markdig.Wpf"
              xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+             xmlns:svc="clr-namespace:TeronWoWLauncher.Services.UI"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
+        <svc:ResponsiveCardWidthConverter x:Key="ResponsiveCardWidth"/>
+        <svc:ResponsiveColumnMarginConverter x:Key="ResponsiveColumnMargin"/>
         <!--
           The app's whole text hierarchy, in one place: one dedicated size/weight/color per role,
           used identically on every tab and dialog instead of each screen inventing its own
@@ -24,6 +27,20 @@
           Button are the deliberate exceptions — see the BodyText and Button styles below for why.
         -->
         <FontFamily x:Key="AppFontFamily">Segoe UI</FontFamily>
+
+        <!--
+          The app's action-color palette, one brush per verb, shared by every Add/Install/Update/
+          Remove icon button across every tab (DLLs, MPQ Patches, Addons Installed, Addons Browse)
+          plus the Play button's own state colors (MainWindow.xaml.cs) — same four values, kept as
+          separate C# constants there rather than pulled from here, since the Play button predates
+          this shared-resource set and already worked correctly; these exist so every *other* button
+          has one place to reference instead of each one hardcoding its own hex string (which is
+          exactly how Add/Update/Remove buttons ended up inconsistent - see issue #14).
+        -->
+        <SolidColorBrush x:Key="AddActionBrush" Color="#3B7D3B"/>
+        <SolidColorBrush x:Key="InstallActionBrush" Color="#2E6DA4"/>
+        <SolidColorBrush x:Key="UpdateActionBrush" Color="#C9922B"/>
+        <SolidColorBrush x:Key="RemoveActionBrush" Color="#A83A3A"/>
 
         <Style x:Key="Heading1Text" TargetType="{x:Type TextBlock}">
             <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}"/>
@@ -55,15 +72,17 @@
         </Style>
 
         <!--
-          Shared page-card look for a tab's content: a fixed-width, horizontally centered dark card, so
-          content reads as one consistent column instead of stretching edge-to-edge when the window is
-          maximized. Tweaks and Settings apply this directly to their one root Border; MPQ Patches and
-          Addons use the split PageCardTopStyle/PageCardBottomStyle pair below instead (they need a
-          pinned header above a separately-scrollable list). DLLs isn't part of this family — it's a
-          genuinely wide side-by-side browse layout, not a narrow form, so it intentionally stays
-          full-width; Log needs the pinned-header-over-list split but also needs real width (long
-          timestamps/messages/stack traces), so it uses the WideCardTopStyle/WideCardBottomStyle pair
-          further below instead — same split structure and visual treatment, no MaxWidth cap.
+          Shared page-card look for a tab's content: a horizontally centered dark card whose MaxWidth
+          scales off the window's own width (ResponsiveCardWidthConverter) instead of a fixed 720px,
+          so content reads as one consistent column on typical window sizes but doesn't strand itself
+          in a sea of empty side margins when the window is maximized on a large/ultrawide monitor.
+          Tweaks, Settings, and DLLs apply this directly to their one root Border (DLLs pins column 1
+          to the standalone scrollbar's width instead of using Padding for it — see its own tab XAML);
+          MPQ Patches and Addons use the split PageCardTopStyle/PageCardBottomStyle pair below instead
+          (they need a pinned header above a separately-scrollable list). Log needs that same pinned-
+          header-over-list split but also needs real width (long timestamps/messages/stack traces), so
+          it uses the WideCardTopStyle/WideCardBottomStyle pair further below instead — same split
+          structure and visual treatment, no MaxWidth cap.
 
           HorizontalAlignment is Stretch, not Center: Stretch makes the Border fill the width its
           parent offers, and MaxWidth then clips that down to the cap — at which point WPF centers the
@@ -72,7 +91,12 @@
           different width depending on what that tab happens to contain.
         -->
         <Style x:Key="PageCardStyle" TargetType="{x:Type Border}">
-            <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="MaxWidth">
+                <Setter.Value>
+                    <Binding RelativeSource="{RelativeSource AncestorType={x:Type Window}}"
+                             Path="ActualWidth" Converter="{StaticResource ResponsiveCardWidth}"/>
+                </Setter.Value>
+            </Setter>
             <Setter Property="Margin" Value="24"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
             <Setter Property="Background" Value="#101014"/>
@@ -99,7 +123,12 @@
           can never drift between Top and Bottom regardless of how wide the real scrollbar renders).
         -->
         <Style x:Key="PageCardTopStyle" TargetType="{x:Type Border}">
-            <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="MaxWidth">
+                <Setter.Value>
+                    <Binding RelativeSource="{RelativeSource AncestorType={x:Type Window}}"
+                             Path="ActualWidth" Converter="{StaticResource ResponsiveCardWidth}"/>
+                </Setter.Value>
+            </Setter>
             <Setter Property="Margin" Value="24,24,24,0"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
             <Setter Property="Background" Value="#101014"/>
@@ -109,7 +138,12 @@
             <Setter Property="Padding" Value="24,24,24,16"/>
         </Style>
         <Style x:Key="PageCardBottomStyle" TargetType="{x:Type Border}">
-            <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="MaxWidth">
+                <Setter.Value>
+                    <Binding RelativeSource="{RelativeSource AncestorType={x:Type Window}}"
+                             Path="ActualWidth" Converter="{StaticResource ResponsiveCardWidth}"/>
+                </Setter.Value>
+            </Setter>
             <Setter Property="Margin" Value="24,0,24,24"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
             <Setter Property="VerticalAlignment" Value="Top"/>
@@ -424,8 +458,16 @@
                                               IsHitTestVisible="False" Visibility="Collapsed"
                                               Content="{TemplateBinding SelectionBoxItem}"/>
 
+                            <!-- Padding="0" is required here, not just cosmetic: this TextBox is still
+                                 matched by the app-wide implicit TextBox style (App.xaml), which sets
+                                 its own Padding="5,4" - stacked on top of the Margin="{TemplateBinding
+                                 Padding}" line below (also 5,4, from the outer ComboBox's own Padding),
+                                 that doubled the vertical inset and clipped descenders inside a
+                                 fixed-height editable ComboBox (the Realmlist field). A non-editable
+                                 ComboBox never hit this, since it shows SelectionBoxItem via
+                                 ContentSite's ContentPresenter instead of a real nested TextBox. -->
                             <TextBox x:Name="PART_EditableTextBox" Grid.Column="0"
-                                     Margin="{TemplateBinding Padding}"
+                                     Margin="{TemplateBinding Padding}" Padding="0"
                                      VerticalAlignment="Center"
                                      Background="Transparent" BorderThickness="0"
                                      Foreground="{TemplateBinding Foreground}"
@@ -462,6 +504,15 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsEditable" Value="True">
                                 <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <!-- The missing half of the above: ContentSite (showing SelectionBoxItem)
+                                 starts Collapsed and nothing ever un-collapsed it for the non-editable
+                                 case - this template was only ever exercised with IsEditable="True"
+                                 (the Realmlist history dropdown) until the Marketplace browser's plain
+                                 (non-editable) ComboBoxes hit this latent gap and rendered completely
+                                 blank, selected item and all. -->
+                            <Trigger Property="IsEditable" Value="False">
+                                <Setter TargetName="ContentSite" Property="Visibility" Value="Visible"/>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Bd" Property="BorderBrush" Value="#5E5E6A"/>
@@ -516,7 +567,21 @@
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="6" SnapsToDevicePixels="True">
-                            <ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}">
+                            <!-- These three TemplateBindings were missing entirely, so setting
+                                 ScrollViewer.VerticalScrollBarVisibility/CanContentScroll on any
+                                 ListBox instance silently did nothing - this inner ScrollViewer just
+                                 used its own defaults (Visible, CanContentScroll=False) regardless.
+                                 Never surfaced before because every existing ListBox (AddonList,
+                                 IgnoredDllList, etc.) either sits inside its own outer ScrollViewer
+                                 with unconstrained height (nothing to scroll internally, so a stray
+                                 Visible scrollbar never showed) or never overflows in the first place -
+                                 the Marketplace Browse list is the first one that's both genuinely
+                                 height-constrained and needs its internal scrollbar hidden/its
+                                 VirtualizingStackPanel to actually virtualize. -->
+                            <ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}"
+                                          CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}"
+                                          VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}"
+                                          HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}">
                                 <ItemsPresenter/>
                             </ScrollViewer>
                         </Border>

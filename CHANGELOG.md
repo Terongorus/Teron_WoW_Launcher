@@ -5,6 +5,347 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [2.0.0] - 2026-08-25
+
+The 2.0.0 pre-release cycle (beta.1 through beta.5), promoted to a stable release, plus one
+further tweak. Everything below is new or changed since the last stable release, v1.12.0.
+
+### Added
+
+- **Profiles**: the launcher now manages multiple WoW installations at once. Each Profile
+  bundles its own directory, name, realmlist, Client identifier, login delay/WDB cleanup, and
+  account — add, rename, switch, and delete them from the Home tab's three-column layout
+  (News/Changelog, Profile list, that profile's settings), with every other tab (Tweaks, DLLs,
+  MPQ Patches, Addons) following whichever Profile is active. A fresh install seeds a default
+  Profile automatically instead of showing an empty list.
+- **Client Identifiers**: a shared, editable table (Settings tab) of known clients — name,
+  download URL, and category (Vanilla or Vanilla+) — seeded with Kronos, TurtleWoW, and OctoWoW,
+  replacing the old fixed three-way client-type choice. Each Profile picks one by reference; a
+  custom/unknown Vanilla+ client gets a generic, byte-verified baseline.
+- **Patch reversibility**: TurtleWoW/OctoWoW tweaks that ship baked into the client (Large
+  Address Aware, sound-in-background, auto-loot, the camera rotation glitch fix, widescreen FoV,
+  nameplate distance) are now genuinely togglable — unchecking one reverts that byte range to
+  Blizzard's original value — instead of read-only "already included" notes.
+- Addons tab gained a **Browse** sub-tab: search and filter Legacy-WoW's (~700 entries) and
+  Warperia's addon catalogs directly inside the launcher, read each addon's own description, and
+  install in one click.
+- Local ("Manual") addon folders with a real `.git` checkout now auto-link to their GitHub/GitLab
+  remote on Refresh, enabling update checks for addons cloned in by hand. GitLab repo URLs are
+  now supported as an addon source too, alongside GitHub, direct archive URLs, and local archives.
+- A Config.WTF toggle on the Tweaks tab forces the specific settings some HD/visual MPQ patches
+  need to render correctly, reapplied automatically at the start of every launch.
+- Custom MPQ patches and DLLs now show a real title/author/description/version/website when the
+  file itself provides it (extracted from a bundled `Patch.toc`/readme, or the DLL's own version
+  resource), with an info button to fill in whatever wasn't found automatically. Search boxes
+  added to MPQ Patches and DLLs (Addons already had one).
+- The launcher checks GitHub on startup for a newer stable release and offers to update:
+  confirming downloads the installer, verifies it against the release's own published checksum,
+  and launches it. A "what's new" summary shows once automatically the first run after updating.
+- Client download/install/update/repair and the launcher's own self-update now show a real
+  progress percentage, transfer speed, and estimated time remaining instead of a generic spinner;
+  canceling an in-progress download asks for confirmation first.
+- The installer offers a Start Menu shortcut checkbox alongside the existing desktop shortcut one.
+
+### Changed
+
+- Icon buttons (Add/Install/Update/Remove) now use a consistent color across every tab, matching
+  the Play button's own state palette, instead of most sharing a plain neutral gray.
+- Static per-tab and footer status labels are replaced with toast notifications: a stack of up to
+  5 dismissible tab-scoped cards, plus a whole-launcher banner for overall status/directory-switch
+  warnings.
+- The DLLs tab is a single list (tracked DLLs grouped above detected ones) instead of two
+  side-by-side panels, each row with its own track/untrack/ignore/info buttons directly on it.
+- The Tweaks tab is split into Mandatory (Signature Removal, Large Address Aware, the Config.WTF
+  toggle) and Optional sections.
+- The launcher's own per-directory files (addon tracking, DLL/MPQ patch info, directory settings,
+  DLL load-order cache) now live inside a `.teronwow` subfolder in each WoW installation instead
+  of sitting loose alongside the actual game files.
+- The Tweaks/DLLs/MPQ Patches/Addons/Settings page card width and the Home tab's column margins
+  now scale with the window's own width instead of fixed values, so a maximized window on a large
+  monitor doesn't strand content in empty side margins.
+- The launcher's default and enforced-minimum window size is now 1350×900 (was 980×700 default /
+  820×540 minimum).
+- Addon installs (extracting a downloaded archive, copying a git-tracked working tree) now run on
+  a background thread instead of freezing the launcher window for the duration.
+
+### Fixed
+
+- The custom window-chrome fix for the maximize-overhang bug was silently disabling WPF's own
+  minimum-size enforcement, letting the window shrink far below its declared minimum and badly
+  break the three-column Home layout.
+- TurtleWoW's max-camera-distance tweak could incorrectly report a client as "already patched" on
+  builds that ship `CameraDistanceMax` already raised to 100 instead of the previously-assumed 50.
+- Toggling a tweak against a mismatched Client identifier now shows a dialog explaining the
+  problem with a one-click "Fix It", instead of a toast or a raw stack trace only visible in the
+  Log tab.
+- Warperia addon installs failed every time with a decoding error (the site's download token is
+  unpadded base64); addon archive installs now share the same zip-slip path-traversal guard the
+  client installer already had.
+- The startup addon refresh (and manual Refresh) no longer crashes the whole launcher on an
+  unexpected error — it logs and shows a toast instead.
+- Several smaller UI fixes: invisible dropdown/Profile-list text against the dark background,
+  addon Browse's list not wrapping or scrolling correctly, a shared scrollbar staying visible on
+  the wrong sub-tab, and a stale self-update temp folder left behind under `%TEMP%`.
+
+## [2.0.0-beta.5] - 2026-08-25
+
+### Changed
+
+- The Tweaks/DLLs/MPQ Patches/Addons/Settings page card and the Home tab's three column margins now
+  scale with the window's own width instead of using fixed values everywhere. Below roughly 1160px
+  wide, both look exactly as before (the page card stays capped at 720px, Home's margins stay at
+  50/40); above that, the page card grows up to 1400px so a maximized window on a large or ultrawide
+  monitor doesn't strand its content in a wall of empty side margins, and Home's margins shrink down
+  toward 20/16 as the window approaches the enforced 900px minimum, giving the three columns more
+  usable width right where it was tightest.
+- Trimmed the MPQ Patches and Addons tab description text (split one run-on note into two lines on
+  MPQ Patches, dropped a redundant sentence on Addons) and gave Repair Game Files its own accent
+  color, matching Delete Game Files' existing treatment.
+
+## [2.0.0-beta.4] - 2026-08-24
+
+### Added
+
+- Local ("Manual") addon folders with a real `.git` checkout are now automatically linked to their
+  GitHub/GitLab remote on Refresh — enabling update checks for addons you cloned in by hand instead
+  of leaving them permanently untrackable. Checked for already-tracked folders too, not just
+  newly-discovered ones, so an addon adopted before this existed (or one you added a remote to
+  afterward) still gets picked up.
+
+### Changed
+
+- Toggling a tweak against a mismatched Client identifier now shows a dialog explaining the
+  problem, with a one-click "Fix It" that jumps straight to the Client identifier dropdown in
+  Profile settings, instead of a toast.
+- The Profile list's Add/Remove controls now match the icon-button style already used on the
+  DLLs/MPQ Patches/Addons tabs (a colored add icon, a colored trash icon) instead of a plain text
+  button and an unstyled "×".
+- The active/selected profile row's highlight is now a single consistent gold accent (border +
+  fill), replacing a mismatched blue border with a gold fill.
+- The launcher window's enforced minimum size is now 900×600 (was 820×540).
+
+### Fixed
+
+- A launcher with no tracked WoW directories yet (a brand-new install) showed an empty Profile list
+  until the user noticed and clicked Add Profile themselves; a default profile — pointed at the
+  launcher's own folder, or an existing pre-Profiles installation directory if one was already
+  configured — is now seeded automatically.
+- The custom window-chrome fix for the maximize-overhang bug was silently preventing WPF's own
+  MinWidth/MinHeight enforcement from ever running, letting the window shrink far below its
+  declared minimum size and badly break the 3-column Home layout.
+- The Profile list's row text was rendering at WPF's own default styling (black, ~12px) instead of
+  the app's theme, since a bare TextBlock has no app-wide default style to fall back on — nearly
+  invisible against the dark background.
+- TurtleWoW's max-camera-distance tweak could incorrectly report a client as "already patched" and
+  refuse to establish a pristine backup, on TurtleWoW builds that ship CameraDistanceMax already
+  raised to 100 instead of the previously-assumed 50.
+
+## [2.0.0-beta.3] - 2026-08-24
+
+### Added
+
+- **Client Identifiers**: a shared, editable table (Settings tab) of known clients — name,
+  download URL, and category (Vanilla or Vanilla+) — seeded with Kronos, TurtleWoW, and OctoWoW
+  defaults, replacing the old fixed three-way client-type choice and single global download URL.
+  Each profile picks one by reference, so several profiles can point at the same server without
+  re-entering its URL, and a custom/unknown Vanilla+ client is supported too (it just gets the
+  generic, byte-verified Vanilla+ baseline instead of a known seed's own extra-widened values).
+- TurtleWoW/OctoWoW tweaks that ship already baked into the client (Large Address Aware,
+  sound-in-background, auto-loot, the camera rotation glitch fix, widescreen FoV, nameplate
+  distance) are now genuinely togglable instead of read-only "already included" notes —
+  unchecking one actually reverts that byte range to Blizzard's original value on rebuild. They
+  default to checked the first time a profile's patches are configured, so an existing install
+  isn't silently reverted the moment this shipped.
+- Home tab redesigned around **Profiles**: a three-column layout (News/Changelog, a Profile list,
+  and that profile's settings) replaces the old two-column Realm/Login layout. A Profile bundles a
+  directory, name, realmlist, Client identifier, login delay, WDB cleanup, and login credentials —
+  add, rename, switch, and delete them entirely from Home, with every other tab (Tweaks, DLLs, MPQ
+  Patches, Addons) following whichever profile is active. Play/Install stays disabled, with an
+  inline explanation, until a profile has a Client identifier assigned.
+
+### Changed
+
+- Settings tab trimmed now that Home's Profile settings panel owns them: installation directory,
+  realmlist, the old singular client-profile selector, login delay, and the WDB cleanup toggle are
+  gone from Settings — only Client Identifiers (the shared table), Repair/Delete Game Files
+  (applying to whichever profile is active on Home), Config.WTF, Launcher window, and Ignored DLLs
+  remain.
+- "Client Profile(s)" was renamed to "Client Identifier(s)" throughout the UI to avoid clashing
+  with the new "Profile" (WoW directory/installation) concept — purely a naming change, no
+  behavior difference.
+- Vanilla+ (TurtleWoW/OctoWoW) tweaks now apply in the same fixed order as the plain Vanilla
+  catalog, instead of a different order that made the two catalogs' Tweaks-tab layouts inconsistent
+  with each other.
+- A profile with no Client identifier assigned shows an inline warning and a disabled Play/Install
+  button instead of a blocking pop-up dialog.
+
+### Fixed
+
+- A `PatchCatalog` static-initialization-order bug could throw a `NullReferenceException` on
+  startup (constant fingerprint fields were declared after the catalog fields that captured them).
+- Addon definitions from one WoW directory could incorrectly appear as tracked in another
+  directory's own addon list, if that other directory's addons.json had never been created yet
+  when a legacy global-addons migration ran — the migration now only adopts entries whose folders
+  actually exist on disk for the directory it's migrating into.
+- Selecting a Client identifier, or naming a profile, didn't show up in the Profile list, the
+  Tweaks tab, or the Play-button gate until several hundred milliseconds later (or, in the worst
+  case, only after restarting) — those all read a value that's only updated on the debounced
+  settings-save tick; they now read the live UI selection directly instead.
+- Applying a tweak against a profile whose Client identifier doesn't actually match its WoW.exe
+  (most commonly: the wrong identifier assigned to a directory) failed with the underlying error
+  only ever visible in the Log tab as a raw stack trace; it now surfaces as a toast naming the
+  mismatched identifier and pointing at Profile settings, instead of failing silently from the
+  user's point of view.
+- The Realmlist field (the one editable dropdown in the app) clipped its own text, because its
+  internal text box picked up the app-wide text box style's padding on top of the dropdown's own,
+  doubling the vertical inset.
+- The Profile list read as a wall of near-invisible text over the background art (fully transparent
+  row backgrounds); rows now sit inside a solid card with a solid per-row background.
+
+## [2.0.0-beta.2] - 2026-07-20
+
+### Added
+
+- A Config.WTF toggle on the Tweaks tab forces the specific settings some HD/visual MPQ patches
+  (e.g. Project Reforged Kronos) need to render correctly, re-applied automatically at the start
+  of every launch since the game client can rewrite some of the same settings itself between
+  sessions. Only touches the handful of keys it needs — every other video setting is left exactly
+  as you set it.
+- Custom MPQ patches now show a real title, author, description, version, and website when
+  available, auto-extracted from a bundled `Patch.toc` or readme-style file inside the patch
+  itself. A new info button per patch lets you fill in whatever wasn't found automatically.
+- DLLs now support the same kind of info entry — many small hand-built mod DLLs carry no
+  version/author/description in the file itself, so a new info button per DLL lets you fill that
+  in by hand. Anything the DLL's own file already provides is shown read-only.
+- Search boxes added to the MPQ Patches and DLLs tabs (Addons already had one).
+
+### Changed
+
+- The Tweaks tab is now split into "Mandatory" and "Optional" sections. Mandatory (Signature
+  Removal, Large Address Aware, the Config.WTF toggle) is called out explicitly as what you need
+  enabled to safely run custom MPQ patches; everything else is optional quality-of-life/visual
+  tweaks that work with or without them.
+- The DLLs tab is restructured into a single list instead of two separate side-by-side panels —
+  every DLL sitting in the game folder shows up together, tracked ones grouped above detected
+  ones, each with its own track/untrack, ignore, and info buttons directly on the row instead of
+  needing to select an item first and click a separate toolbar button.
+- The launcher's own per-directory files (addon tracking, DLL/MPQ patch info, directory settings,
+  DLL load-order cache) now live inside a `.teronwow` subfolder in each WoW installation instead
+  of sitting loose alongside your actual game files.
+
+### Fixed
+
+- The launcher window no longer overhangs past the screen edge when maximized — content used to
+  read as pushed in a few pixels from every edge compared to the same window restored.
+- An addon with no version listed in its `.toc` now shows "v?" instead of a blank gap; an addon
+  whose `.toc` version already starts with "v" no longer shows a doubled "vv1.0.0".
+- Fixed a rare case where adding a new WoW installation could silently copy in another
+  installation's saved account/realmlist/tweaks instead of starting fresh, if an earlier internal
+  cleanup step failed without being noticed.
+- The launcher could potentially crash during Install if pointed at a folder already containing a
+  corrupted or locked `WoW.exe`.
+- Removing an addon (especially one tracked via GitHub) or clearing the WDB cache before launch no
+  longer freezes the launcher window while it works.
+
+## [2.0.0-beta.1] - 2026-07-17
+
+### Added
+
+- Addons tab gained a Browse sub-toggle alongside Installed: search and filter Legacy-WoW's full
+  addon catalog (~700 entries, by category) and Warperia's paginated catalog directly inside the
+  launcher, view each addon's own description page, and install straight from the browse results
+  using the same install path as pasting a URL manually.
+- The launcher now supports multiple WoW installations: a quick-switch dropdown on the Home tab
+  lists every installation directory you've ever pointed it at, and switching one loads that
+  directory's own account, realmlist, tweaks, patches, DLLs, and addons instead of sharing one
+  global set across every folder. If a previously-configured directory no longer exists on disk,
+  the launcher now falls back to the most recently used surviving one automatically, with a clear
+  warning instead of silently failing.
+- The launcher's own location is no longer tied to any WoW installation — it can live anywhere
+  and simply points at whichever game folder(s) you configure, instead of assuming it's installed
+  inside one.
+- Installing over an existing, already-up-to-date 1.12.1 client now adopts it in place instead of
+  blindly re-downloading and overwriting it.
+- The launcher now checks GitHub on startup for a newer stable release and offers to update:
+  confirm the prompt and it downloads the installer, verifies it against the release's own
+  published checksum, then launches it and closes itself so the update can proceed.
+- A "what's new" summary now shows once, automatically, the first time you run the launcher after
+  it's updated to a new version.
+- Client download/install/update/repair, extraction, and the launcher's own self-update download
+  now all show a real progress percentage, transfer speed, and estimated time remaining, instead
+  of a generic spinner that gave no sense of how long an install or extraction would actually
+  take.
+- Canceling an in-progress download now asks for confirmation first, instead of stopping
+  immediately on a single click.
+- GitLab repo URLs are now supported as an addon source alongside GitHub — paste a
+  `gitlab.com/...` repo link and it installs and tracks for updates the same way.
+- Add/Install/Update/Remove icon buttons now use a consistent color across every tab (DLLs, MPQ
+  Patches, Addons Installed and Browse) matching the Play button's own state palette — green for
+  Add, blue for Install, gold for Update, and a new red for Remove/Uninstall — instead of most of
+  them sharing the same plain neutral gray as unrelated actions like Refresh.
+- The installer now offers a Start Menu shortcut checkbox alongside the existing desktop shortcut
+  one, so either can be turned off independently instead of always creating a Start Menu entry.
+
+### Changed
+
+- Reorganized every service class into namespaced subfolders (`Services/Addons`, `Services/Core`,
+  `Services/Dlls`, `Services/Launch`, `Services/Patching`, `Services/UI`) instead of one flat
+  `Services` folder — no behavior change, purely internal organization.
+- Replaced the static per-tab and footer status labels with toast notifications: tab-scoped
+  messages now appear as a stack of up to 5 dismissible cards floating over the active tab, and
+  whole-launcher messages (overall status, directory-switch warnings) show as a single banner that
+  auto-dismisses for informational messages but stays until closed for warnings/errors. This also
+  fixes tab-scoped messages going invisible when triggered from a sub-tab (e.g. addon Browse) that
+  wasn't the one the old static label lived on.
+- Addon installs — copying a multi-folder local addon, extracting a downloaded archive, and
+  copying a GitHub/GitLab-tracked addon's working tree — now run on a background thread instead
+  of freezing the launcher window for the duration, matching the client installer's own behavior.
+- A fresh WoW installation directory now starts with every Tweaks-tab patch unchecked, rather than
+  silently inheriting whichever ones happened to be enabled by default — each installation's
+  settings are fully independent (see multi-installation support above).
+- Home tab's Client Path, Realm, and Login sections now sit in that fixed order with even spacing
+  between them that scales with the window instead of using mismatched fixed-pixel gaps.
+
+### Fixed
+
+- Non-editable dropdowns (used by the new addon Browse category filter) rendered with invisible
+  selected-item text; a shared style trigger only ever handled the editable case used by the
+  Realmlist history dropdown.
+- Height-constrained lists (used by Browse's results) could ignore their own scrollbar visibility
+  and horizontal-scroll settings, letting long addon names/descriptions run off the side instead
+  of wrapping.
+- A shared scrollbar between the Installed and Browse sub-tabs stayed visible even while its own
+  sub-tab wasn't the active one.
+- Switching from a long addon list to a much shorter one (e.g. changing a Browse filter) could
+  leave the list scrolled partway down instead of resetting to the top.
+- Loading the addon Browse tab no longer fires a thumbnail/detail fetch for every single entry at
+  once (noticeable stutter on Legacy-WoW's ~700-entry catalog) — only rows actually scrolled into
+  view are fetched.
+- Warperia addon installs failed every time with a decoding error, because the site's download
+  token is base64 without padding and .NET's decoder requires it; the token is now padded before
+  decoding.
+- Extended the client installer's zip-slip path-traversal guard to addon archive installs as well
+  (a maliciously crafted addon archive could otherwise have written outside the intended addon
+  folder) — addon sources are third-party content and deserve at least the same guard as the
+  launcher's own client download.
+- The startup addon refresh (and manual Refresh) could crash the whole launcher on an unexpected
+  error with nothing catching it; it now logs and shows a toast instead.
+- Adding an addon whose source download itself fails is now handled by the add flow directly
+  rather than depending on whichever caller happens to wrap it.
+- A normal client download no longer double-checks the remote version a second time after already
+  confirming it during the download step.
+- The launcher no longer leaves a temporary installer folder behind under `%TEMP%` after every
+  self-update — stale ones from previous updates are now swept automatically on the next check.
+- The addon marketplace cache loader now tolerates any read/parse failure instead of only a
+  malformed-JSON one, falling back to a fresh fetch either way.
+- The auto-update checker's version comparison couldn't parse a running pre-release version (e.g.
+  this beta), which would have silently disabled update checking entirely for anyone on a beta
+  build; it now strips the pre-release suffix before comparing, so a beta install can still
+  correctly detect a newer stable release.
+- The installer's title bar/version display showed a padded four-part version number (e.g.
+  "1.12.0.0") instead of the real three-part one, because the build passed MSBuild's auto-padded
+  `FileVersion` to the installer script instead of the project's actual `Version` string.
+
 ## [1.12.0] - 2026-07-15
 
 ### Added

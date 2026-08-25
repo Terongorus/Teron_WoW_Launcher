@@ -28,13 +28,19 @@
     </Window.CommandBindings>
 
     <!-- One seamless card for both the close button and the document — no separate header strip
-         with its own background/edge, so there's no visible seam between the two. -->
+         with its own background/edge, so there's no visible seam between the two. TitleText shows
+         the constructor's "title" visibly, since Window.Title alone is never rendered anywhere with
+         this dialog's custom chrome (CaptionHeight="0") — a dialog summoned unprompted (e.g. the
+         "what's new" popup) needs that context; a document already showing its own top-level
+         Markdown heading (README/CHANGELOG's own "# ...") makes it merely redundant, not missing. -->
     <Border Margin="16" Background="#101014" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="6">
         <DockPanel>
             <Button DockPanel.Dock="Top" Style="{StaticResource WindowCloseButtonStyle}" Content="&#xE8BB;"
                     HorizontalAlignment="Right" Click="OnCloseClicked" ToolTip="Close"/>
+            <TextBlock x:Name="TitleText" DockPanel.Dock="Top" Style="{StaticResource Heading2Text}"
+                       Margin="20,12,20,0"/>
             <markdig:MarkdownViewer x:Name="Viewer" Style="{StaticResource ExpandedMarkdownViewer}"
-                                     Margin="16,0,16,16"/>
+                                     Margin="16,8,16,16"/>
         </DockPanel>
     </Border>
 </Window>

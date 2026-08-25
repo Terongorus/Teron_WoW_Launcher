@@ -28,7 +28,7 @@
 
             <TextBlock x:Name="RepoLinkText" DockPanel.Dock="Top" Margin="16,12,16,0" Visibility="Collapsed">
                 <Hyperlink x:Name="RepoLink" RequestNavigate="OnRepoLinkNavigate" Foreground="#E6C067">
-                    View on GitHub &#x2197;
+                    <Run x:Name="RepoLinkRun" Text="View on GitHub"/> &#x2197;
                 </Hyperlink>
             </TextBlock>
 

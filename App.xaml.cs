@@ -2,7 +2,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
-using TeronWoWLauncher.Services;
+using TeronWoWLauncher.Services.Addons;
+using TeronWoWLauncher.Services.Core;
+using TeronWoWLauncher.Services.Dlls;
+using TeronWoWLauncher.Services.Launch;
+using TeronWoWLauncher.Services.Patching;
+using TeronWoWLauncher.Services.UI;
 
 namespace TeronWoWLauncher;
 

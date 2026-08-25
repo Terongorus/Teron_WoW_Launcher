@@ -1,7 +1,12 @@
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Input;
-using TeronWoWLauncher.Services;
+using TeronWoWLauncher.Services.Addons;
+using TeronWoWLauncher.Services.Core;
+using TeronWoWLauncher.Services.Dlls;
+using TeronWoWLauncher.Services.Launch;
+using TeronWoWLauncher.Services.Patching;
+using TeronWoWLauncher.Services.UI;
 
 namespace TeronWoWLauncher.Dialogs;
 
@@ -12,6 +17,7 @@ public partial class MarkdownPreviewDialog : Window
     {
         InitializeComponent();
         Title = title;
+        TitleText.Text = title;
         Viewer.Markdown = markdown;
         WindowChromeHelper.FixMaximizedBounds(this);
         MarkdownScrollHelper.AttachFastScroll(Viewer);

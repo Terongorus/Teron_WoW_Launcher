@@ -2,12 +2,13 @@ using System.Windows;
 
 namespace TeronWoWLauncher.Dialogs;
 
-/// <summary>Confirms updating the installed client, showing what's known to have changed remotely.</summary>
+/// <summary>Confirms updating the installed client (or the launcher itself), showing what's known to have changed remotely.</summary>
 public partial class UpdateConfirmDialog : Window
 {
-    public UpdateConfirmDialog(string detail)
+    public UpdateConfirmDialog(string detail, string title = "A different client archive is available")
     {
         InitializeComponent();
+        TitleText.Text = title;
         DetailText.Text = detail;
     }
 
