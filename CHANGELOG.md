@@ -5,6 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [2.0.0] - 2026-08-25
+
+The 2.0.0 pre-release cycle (beta.1 through beta.5), promoted to a stable release, plus one
+further tweak. Everything below is new or changed since the last stable release, v1.12.0.
+
+### Added
+
+- **Profiles**: the launcher now manages multiple WoW installations at once. Each Profile
+  bundles its own directory, name, realmlist, Client identifier, login delay/WDB cleanup, and
+  account — add, rename, switch, and delete them from the Home tab's three-column layout
+  (News/Changelog, Profile list, that profile's settings), with every other tab (Tweaks, DLLs,
+  MPQ Patches, Addons) following whichever Profile is active. A fresh install seeds a default
+  Profile automatically instead of showing an empty list.
+- **Client Identifiers**: a shared, editable table (Settings tab) of known clients — name,
+  download URL, and category (Vanilla or Vanilla+) — seeded with Kronos, TurtleWoW, and OctoWoW,
+  replacing the old fixed three-way client-type choice. Each Profile picks one by reference; a
+  custom/unknown Vanilla+ client gets a generic, byte-verified baseline.
+- **Patch reversibility**: TurtleWoW/OctoWoW tweaks that ship baked into the client (Large
+  Address Aware, sound-in-background, auto-loot, the camera rotation glitch fix, widescreen FoV,
+  nameplate distance) are now genuinely togglable — unchecking one reverts that byte range to
+  Blizzard's original value — instead of read-only "already included" notes.
+- Addons tab gained a **Browse** sub-tab: search and filter Legacy-WoW's (~700 entries) and
+  Warperia's addon catalogs directly inside the launcher, read each addon's own description, and
+  install in one click.
+- Local ("Manual") addon folders with a real `.git` checkout now auto-link to their GitHub/GitLab
+  remote on Refresh, enabling update checks for addons cloned in by hand. GitLab repo URLs are
+  now supported as an addon source too, alongside GitHub, direct archive URLs, and local archives.
+- A Config.WTF toggle on the Tweaks tab forces the specific settings some HD/visual MPQ patches
+  need to render correctly, reapplied automatically at the start of every launch.
+- Custom MPQ patches and DLLs now show a real title/author/description/version/website when the
+  file itself provides it (extracted from a bundled `Patch.toc`/readme, or the DLL's own version
+  resource), with an info button to fill in whatever wasn't found automatically. Search boxes
+  added to MPQ Patches and DLLs (Addons already had one).
+- The launcher checks GitHub on startup for a newer stable release and offers to update:
+  confirming downloads the installer, verifies it against the release's own published checksum,
+  and launches it. A "what's new" summary shows once automatically the first run after updating.
+- Client download/install/update/repair and the launcher's own self-update now show a real
+  progress percentage, transfer speed, and estimated time remaining instead of a generic spinner;
+  canceling an in-progress download asks for confirmation first.
+- The installer offers a Start Menu shortcut checkbox alongside the existing desktop shortcut one.
+
+### Changed
+
+- Icon buttons (Add/Install/Update/Remove) now use a consistent color across every tab, matching
+  the Play button's own state palette, instead of most sharing a plain neutral gray.
+- Static per-tab and footer status labels are replaced with toast notifications: a stack of up to
+  5 dismissible tab-scoped cards, plus a whole-launcher banner for overall status/directory-switch
+  warnings.
+- The DLLs tab is a single list (tracked DLLs grouped above detected ones) instead of two
+  side-by-side panels, each row with its own track/untrack/ignore/info buttons directly on it.
+- The Tweaks tab is split into Mandatory (Signature Removal, Large Address Aware, the Config.WTF
+  toggle) and Optional sections.
+- The launcher's own per-directory files (addon tracking, DLL/MPQ patch info, directory settings,
+  DLL load-order cache) now live inside a `.teronwow` subfolder in each WoW installation instead
+  of sitting loose alongside the actual game files.
+- The Tweaks/DLLs/MPQ Patches/Addons/Settings page card width and the Home tab's column margins
+  now scale with the window's own width instead of fixed values, so a maximized window on a large
+  monitor doesn't strand content in empty side margins.
+- The launcher's default and enforced-minimum window size is now 1350×900 (was 980×700 default /
+  820×540 minimum).
+- Addon installs (extracting a downloaded archive, copying a git-tracked working tree) now run on
+  a background thread instead of freezing the launcher window for the duration.
+
+### Fixed
+
+- The custom window-chrome fix for the maximize-overhang bug was silently disabling WPF's own
+  minimum-size enforcement, letting the window shrink far below its declared minimum and badly
+  break the three-column Home layout.
+- TurtleWoW's max-camera-distance tweak could incorrectly report a client as "already patched" on
+  builds that ship `CameraDistanceMax` already raised to 100 instead of the previously-assumed 50.
+- Toggling a tweak against a mismatched Client identifier now shows a dialog explaining the
+  problem with a one-click "Fix It", instead of a toast or a raw stack trace only visible in the
+  Log tab.
+- Warperia addon installs failed every time with a decoding error (the site's download token is
+  unpadded base64); addon archive installs now share the same zip-slip path-traversal guard the
+  client installer already had.
+- The startup addon refresh (and manual Refresh) no longer crashes the whole launcher on an
+  unexpected error — it logs and shows a toast instead.
+- Several smaller UI fixes: invisible dropdown/Profile-list text against the dark background,
+  addon Browse's list not wrapping or scrolling correctly, a shared scrollbar staying visible on
+  the wrong sub-tab, and a stale self-update temp folder left behind under `%TEMP%`.
+
 ## [2.0.0-beta.5] - 2026-08-25
 
 ### Changed

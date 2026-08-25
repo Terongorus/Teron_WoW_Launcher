@@ -6,7 +6,7 @@
         xmlns:svc="clr-namespace:TeronWoWLauncher.Services.UI"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         mc:Ignorable="d" x:Class="TeronWoWLauncher.MainWindow"
-        Height="700" Width="980" MinHeight="600" MinWidth="900"
+        Height="900" Width="1350" MinHeight="900" MinWidth="1350"
         WindowStartupLocation="CenterScreen"
         Icon="game.ico"
         Background="#1B1B1F">

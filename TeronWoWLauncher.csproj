@@ -23,14 +23,44 @@
     <Product>Teron WoW Launcher (TWL)</Product>
     <Company>Teronverse</Company>
     <Authors>Kaloyan Kolev</Authors>
-    <Version>2.0.0-beta.5</Version>
-    <!-- Keep AssemblyInformationalVersion clean ("2.0.0-beta.4", not "2.0.0-beta.4+<gitsha>"). -->
+    <!-- Keep AssemblyInformationalVersion clean ("2.0.0.7", not "2.0.0.7+<gitsha>"). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 
     <!-- Shown in Explorer/taskbar/Alt+Tab (and used as MainWindow's own icon below, since the
          custom title bar has no native caption icon slot to pick it up from automatically). -->
     <ApplicationIcon>game.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <!--
+    Auto-incrementing build-number component (portfolio-wide convention, adopted here now that
+    2.0.0 has shipped stable - was deliberately skipped through the whole beta.1-beta.5 cycle
+    because this target produces a purely numeric X.Y.Z.BuildNumber with no room for a "-beta.N"
+    suffix, and LauncherUpdateService.IsNewer's StripSuffix helper specifically depended on the
+    CURRENT version carrying one to compare correctly against GitHub's suffix-free latest-release
+    tag. Now that there's no suffix to strip, StripSuffix is simply a no-op (no dash found) and
+    IsNewer's System.Version comparison works unchanged against a 4-part current version.
+  -->
+  <PropertyGroup>
+    <MajorMinorPatchVersion>2.0.0</MajorMinorPatchVersion>
+    <BuildNumberFile>$(MSBuildProjectDirectory)\BuildNumber.txt</BuildNumberFile>
+  </PropertyGroup>
+
+  <Target Name="IncrementBuildNumber" BeforeTargets="BeforeBuild">
+    <ReadLinesFromFile File="$(BuildNumberFile)" Condition="Exists('$(BuildNumberFile)')">
+      <Output TaskParameter="Lines" ItemName="_BuildNumberLine" />
+    </ReadLinesFromFile>
+    <PropertyGroup>
+      <_PreviousBuildNumber Condition="'@(_BuildNumberLine)' != ''">@(_BuildNumberLine)</_PreviousBuildNumber>
+      <_PreviousBuildNumber Condition="'$(_PreviousBuildNumber)' == ''">0</_PreviousBuildNumber>
+      <BuildNumber>$([MSBuild]::Add($(_PreviousBuildNumber), 1))</BuildNumber>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(BuildNumberFile)" Lines="$(BuildNumber)" Overwrite="true" />
+    <PropertyGroup>
+      <AssemblyVersion>$(MajorMinorPatchVersion).$(BuildNumber)</AssemblyVersion>
+      <FileVersion>$(MajorMinorPatchVersion).$(BuildNumber)</FileVersion>
+      <Version>$(MajorMinorPatchVersion).$(BuildNumber)</Version>
+    </PropertyGroup>
+  </Target>
 
   <!--
     Directory.Build.props relocates BaseIntermediateOutputPath to Build\obj\TeronWoWLauncher\ (the

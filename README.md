@@ -164,7 +164,7 @@ own code.
 
 ## Project status
 
-Version 2.0.0-beta.5. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
+Version 2.0.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
 ## Potential future features
