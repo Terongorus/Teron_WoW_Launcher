@@ -133,7 +133,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        InitializeComponent();
+       InitializeComponent();
 
         Title = AppInfo.DisplayNameWithVersion;
         HeaderText.Text = AppInfo.DisplayName;
