@@ -9,9 +9,12 @@ namespace TeronWoWLauncher.Services.Core;
 /// resets it. Addon authors use these in their .toc "## Title:" line so the in-game addon list shows
 /// a styled name (e.g. <c>|cffffcc00Shagu|cffffffffTweaks</c>); we render the same thing ourselves.
 /// </summary>
-public static class WowColorTextParser
+public static partial class WowColorTextParser
 {
-    private static readonly Regex Token = new(@"\|c(?<argb>[0-9A-Fa-f]{8})|\|r", RegexOptions.Compiled);
+    [GeneratedRegex(@"\|c(?<argb>[0-9A-Fa-f]{8})|\|r", RegexOptions.Compiled)]
+    private static partial Regex TokenRegEx();
+
+    private static readonly Regex Token = TokenRegEx();
 
     /// <summary>Splits text into (color-or-null, text) runs in order. A null color means "inherit".</summary>
     public static IReadOnlyList<(Color? Color, string Text)> Parse(string input)

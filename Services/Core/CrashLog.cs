@@ -10,7 +10,7 @@ namespace TeronWoWLauncher.Services.Core;
 /// </summary>
 public static class CrashLog
 {
-    private static readonly object _gate = new();
+    private static readonly Lock _gate = new();
 
     public static void Write(Exception ex)
     {

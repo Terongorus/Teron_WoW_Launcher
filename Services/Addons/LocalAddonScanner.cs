@@ -34,7 +34,7 @@ public sealed class LocalAddonScanner
         List<string> dirs;
         try
         {
-            dirs = Directory.EnumerateDirectories(addonsDir).ToList();
+            dirs = [.. Directory.EnumerateDirectories(addonsDir)];
         }
         catch (Exception ex)
         {
@@ -70,6 +70,6 @@ public sealed class LocalAddonScanner
             result.Add(new LocalAddonCandidate { FolderName = folderName, Title = title, Version = version });
         }
 
-        return result.OrderBy(c => c.FolderName, System.StringComparer.OrdinalIgnoreCase).ToList();
+        return [.. result.OrderBy(c => c.FolderName, System.StringComparer.OrdinalIgnoreCase)];
     }
 }

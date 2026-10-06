@@ -22,3 +22,12 @@ csharp_new_line_before_catch = true
 csharp_new_line_before_finally = true
 csharp_prefer_braces = true:suggestion
 dotnet_sort_system_directives_first = true
+
+# IDE0230: Use UTF-8 string literal
+dotnet_diagnostic.IDE0230.severity = none
+
+# SYSLIB1054: Use 'LibraryImportAttribute' instead of 'DllImportAttribute' to generate P/Invoke marshalling code at compile time
+dotnet_diagnostic.SYSLIB1054.severity = silent
+
+# CA2101: Specify marshaling for P/Invoke string arguments
+dotnet_diagnostic.CA2101.severity = silent

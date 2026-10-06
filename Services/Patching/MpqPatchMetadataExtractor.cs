@@ -35,21 +35,25 @@ public readonly record struct MpqExtractedInfo(string? Title, string? Author, st
 /// which is far more reliable than scraping free text). Falls back to a handful of common
 /// readme/info-style files only when no Patch.toc (or an empty one) is present.
 /// </summary>
-public static class MpqPatchMetadataExtractor
+public static partial class MpqPatchMetadataExtractor
 {
+    [GeneratedRegex(@"^\s*(?:-\s*)?(?:author|by|created\s*by|made\s*by)\s*[:\-]\s*(?<name>.+?)\s*$", RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled, "en-US")]
+    private static partial Regex MPQPatchTOCAuthorRegEx();
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex MPQPatchExtractedTOCDescriptionRegEx();
+
     private const string PatchTocFileName = "Patch.toc";
 
     private static readonly string[] ReadmeCandidateFileNames =
-    {
+    [
         "readme.txt", "readme.md", "info.txt", "description.txt",
         "changelog.txt", "credits.txt", "notes.txt",
-    };
+    ];
 
     // First match wins on a line like "Author: Foo" / "By: Foo" / "Created by: Foo" — deliberately
     // simple; a false negative (Author stays null) is a fully acceptable degrade for best-effort.
-    private static readonly Regex AuthorLineRegex = new(
-        @"^\s*(?:-\s*)?(?:author|by|created\s*by|made\s*by)\s*[:\-]\s*(?<name>.+?)\s*$",
-        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex AuthorLineRegex = MPQPatchTOCAuthorRegEx();
 
     private const int DescriptionMaxLength = 500;
 
@@ -174,7 +178,7 @@ public static class MpqPatchMetadataExtractor
                 author = m.Groups["name"].Value.Trim();
             }
 
-            string description = Regex.Replace(text.Trim(), @"\s+", " ");
+            string description = MPQPatchExtractedTOCDescriptionRegEx().Replace(text.Trim(), " ");
             if (description.Length > DescriptionMaxLength)
             {
                 description = description[..DescriptionMaxLength].TrimEnd() + "…";

@@ -28,12 +28,12 @@ public sealed class PatchService
 
     private readonly Logger _log = Logger.Instance;
 
-    public string WowExePath(string wowDir) => Path.Combine(wowDir, WowExeFileName);
-    public string BackupPath(string wowDir) => Path.Combine(wowDir, BackupFileName);
-    public bool BackupExists(string wowDir) => File.Exists(BackupPath(wowDir));
+    public static string WowExePath(string wowDir) => Path.Combine(wowDir, WowExeFileName);
+    public static string BackupPath(string wowDir) => Path.Combine(wowDir, BackupFileName);
+    public static bool BackupExists(string wowDir) => File.Exists(BackupPath(wowDir));
 
     /// <summary>SHA-256 of the current WoW.exe.backup, or null if there isn't one.</summary>
-    public string? ComputeBackupHash(string wowDir)
+    public static string? ComputeBackupHash(string wowDir)
     {
         string backup = BackupPath(wowDir);
         if (!File.Exists(backup))
@@ -94,11 +94,7 @@ public sealed class PatchService
     /// <summary>
     /// Rebuild WoW.exe from the pristine backup, applying the enabled patches in catalog order.
     /// </summary>
-    public void Rebuild(
-        string wowDir,
-        IReadOnlyList<PatchDefinition> catalog,
-        ISet<string> enabledIds,
-        IReadOnlyDictionary<string, double?> parameters)
+    public void Rebuild(string wowDir, IReadOnlyList<PatchDefinition> catalog, ISet<string> enabledIds, IReadOnlyDictionary<string, double?> parameters)
     {
         string exe = WowExePath(wowDir);
         string backup = BackupPath(wowDir);
@@ -119,11 +115,11 @@ public sealed class PatchService
             parameters.TryGetValue(patch.Id, out double? value);
             if (enabledIds.Contains(patch.Id))
             {
-                ApplyPatch(image, patch, value);
+                ApplyPatch(ref image, patch, value);
             }
             else
             {
-                ApplyPatchOff(image, patch, value);
+                ApplyPatchOff(ref image, patch, value);
             }
         }
 
@@ -168,7 +164,7 @@ public sealed class PatchService
     }
 
     /// <summary>Remove any leftover *.tmp rebuild artifacts from a previous crashed/killed run.</summary>
-    private void CleanupStaleTempFiles(string wowDir)
+    private static void CleanupStaleTempFiles(string wowDir)
     {
         try
         {
@@ -203,43 +199,72 @@ public sealed class PatchService
                 // can't say what value is currently baked in - flagging it is what lets
                 // EnsurePristineBackup refuse instead of silently adopting a non-pristine exe as the
                 // backup baseline for this patch (closes a gap the toggle-only check below can't see).
-                IReadOnlyList<PatchStep> defSteps = patch.BuildSteps(patch.Parameter.Default);
-                bool anyRegionNonPristine = defSteps.Any(s =>
-                    s.AcceptBefore is { Length: > 0 } fingerprints &&
-                    !fingerprints.Any(fp => RegionEquals(image, checked((int)s.Offset), fp)));
-                if (anyRegionNonPristine)
+                IReadOnlyList<PatchStep>? defSteps = patch.BuildSteps?.Invoke(patch.Parameter.Default);
+                if (defSteps is not null)
                 {
-                    applied.Add(patch.Id);
+                    bool anyRegionNonPristine = defSteps.Any(s =>
+                        s.AcceptBefore is { Length: > 0 } fingerprints &&
+                        !fingerprints.Any(fp => fp is not null && RegionEquals(image, checked((int)s.Offset), fp)));
+                    if (anyRegionNonPristine)
+                    {
+                        applied.Add(patch.Id);
+                    }
                 }
 
                 continue;
             }
 
-            IReadOnlyList<PatchStep> steps = patch.BuildSteps(null);
-
-            // A toggle patch whose every step carries a WriteOff is fully revertible regardless of
-            // what state the exe is currently in - Rebuild can always reach either "on" (idempotent
-            // Write) or "off" (explicit WriteOff) from here, so it's a legitimate pristine-backup
-            // baseline either way and shouldn't block backup creation just because a community client
-            // happens to ship it already toggled on. Only a patch with no revert path at all still
-            // needs the strict "must currently be pristine" gate below.
-            bool fullyRevertible = steps.Count > 0 && steps.All(s => s.WriteOff is not null);
-            if (!fullyRevertible && steps.Count > 0 && steps.All(s => StepApplied(image, s)))
+            IReadOnlyList<PatchStep>? steps = patch.BuildSteps?.Invoke(null);
+            if (steps is not null)
             {
-                applied.Add(patch.Id);
+                // A toggle patch whose every step carries a WriteOff is fully revertible regardless of
+                // what state the exe is currently in - Rebuild can always reach either "on" (idempotent
+                // Write) or "off" (explicit WriteOff) from here, so it's a legitimate pristine-backup
+                // baseline either way and shouldn't block backup creation just because a community client
+                // happens to ship it already toggled on. Only a patch with no revert path at all still
+                // needs the strict "must currently be pristine" gate below.
+                bool fullyRevertible = steps.Count > 0 && steps.All(s => s.WriteOff is not null);
+                if (!fullyRevertible && steps.Count > 0 && steps.All(s => StepApplied(image, s)))
+                {
+                    applied.Add(patch.Id);
+                }
             }
         }
 
         return applied;
     }
 
-    private void ApplyPatch(byte[] image, PatchDefinition patch, double? parameter)
+    private void ApplyPatch(ref byte[] image, PatchDefinition patch, double? parameter)
     {
-        IReadOnlyList<PatchStep> steps = patch.BuildSteps(parameter);
-        _log.Info($"  Applying patch: {patch.Name}");
-        foreach (PatchStep step in steps)
+        IReadOnlyList<PatchStep>? steps = patch.BuildSteps?.Invoke(parameter);
+        IReadOnlyList<PatchStep.QuestLogPatchStruct>? questLogSteps = patch.BuildQuestLogSteps?.Invoke(parameter.HasValue ? (int)parameter.Value : null);
+
+        if (steps is null && questLogSteps is null)
         {
-            ApplyStep(image, step, patch.Name);
+            return;
+        }
+        if (parameter is not null)
+        {
+            _log.Info($"  Applying patch: {patch.Name} with value {parameter}");
+        }
+        else
+        {
+            _log.Info($"  Applying patch: {patch.Name}");
+        }
+        // Apply all the regular steps first, then the quest log steps. This order is important because some quest log steps may depend on the regular steps being applied first.
+        if (steps is not null)
+        {
+            foreach (PatchStep step in steps)
+            {
+                ApplyStep(ref image, patch.Name, step, null, _log);
+            }
+        }
+        if (questLogSteps is not null)
+        {
+            foreach (PatchStep.QuestLogPatchStruct questStep in questLogSteps)
+            {
+                ApplyStep(ref image, patch.Name, null, questStep, _log);
+            }
         }
     }
 
@@ -250,10 +275,10 @@ public sealed class PatchService
     /// "disabled") would silently leave that baked-in value in place instead of actually turning it
     /// off. A step without a WriteOff is left untouched, same as before.
     /// </summary>
-    private void ApplyPatchOff(byte[] image, PatchDefinition patch, double? parameter)
+    private void ApplyPatchOff(ref byte[] image, PatchDefinition patch, double? parameter)
     {
-        IReadOnlyList<PatchStep> steps = patch.BuildSteps(parameter);
-        if (!steps.Any(s => s.WriteOff is not null))
+        IReadOnlyList<PatchStep>? steps = patch.BuildSteps?.Invoke(parameter);
+        if (steps is null || !steps.Any(s => s.WriteOff is not null))
         {
             return;
         }
@@ -263,59 +288,159 @@ public sealed class PatchService
         {
             if (step.WriteOff is not null)
             {
-                ApplyOffStep(image, step, patch.Name);
+                ApplyOffStep(ref image, step, patch.Name);
             }
         }
     }
 
-    private static void ApplyStep(byte[] image, PatchStep step, string patchName)
+    private static void ApplyStep(ref byte[] image, string patchName, PatchStep? step, PatchStep.QuestLogPatchStruct? questStep, Logger log)
     {
-        if (step.Offset >= 0)
+        if (step is not null)
         {
-            int offset = checked((int)step.Offset);
-            if (offset + step.Write.Length > image.Length)
+            if (step.Write is not { Length: > 0 } write)
             {
-                throw new InvalidOperationException(
-                    $"Patch '{patchName}': offset 0x{offset:X} is beyond the end of the file.");
+                throw new InvalidOperationException($"Patch '{patchName}': Write bytes must not be null or empty.");
             }
 
-            // Idempotent: already the target value, nothing to do.
-            if (RegionEquals(image, offset, step.Write))
+            if (step.Offset >= 0)
             {
-                return;
-            }
-
-            if (step.AcceptBefore is { Length: > 0 } &&
-                !step.AcceptBefore.Any(expected => RegionEquals(image, offset, expected)))
-            {
-                throw new InvalidOperationException(
-                    $"Patch '{patchName}': unexpected bytes at 0x{offset:X}. The client is likely an " +
-                    "unsupported build; aborting so the executable is not corrupted.");
-            }
-
-            Buffer.BlockCopy(step.Write, 0, image, offset, step.Write.Length);
-        }
-        else
-        {
-            if (step.Find is null || step.Find.Length != step.Write.Length)
-            {
-                throw new InvalidOperationException($"Patch '{patchName}': malformed pattern step.");
-            }
-
-            int index = IndexOf(image, step.Find);
-            if (index < 0)
-            {
-                if (IndexOf(image, step.Write) >= 0)
+                int offset = checked((int)step.Offset);
+                if (offset + write.Length > image.Length)
                 {
-                    return; // already applied
+                    throw new InvalidOperationException($"Patch '{patchName}': offset 0x{offset:X} is beyond the end of the file.");
                 }
-
-                throw new InvalidOperationException(
-                    $"Patch '{patchName}': could not locate its target bytes (unexpected build or a " +
-                    "preceding patch changed this region).");
+                // Idempotent: already the target value, nothing to do.
+                if (RegionEquals(image, offset, write))
+                {
+                    return;
+                }
+                byte[] localImage = image;
+                if (step.AcceptBefore is { Length: > 0 } &&
+                    !step.AcceptBefore.Any(expected => expected is not null && RegionEquals(localImage, offset, expected)))
+                {
+                    throw new InvalidOperationException($"Patch '{patchName}': unexpected bytes at 0x{offset:X}. The client is likely an " + "unsupported build; aborting so the executable is not corrupted.");
+                }
+                Buffer.BlockCopy(write, 0, image, offset, write.Length);
             }
+            else
+            {
+                if (step.Find is null || step.Find.Length != write.Length)
+                {
+                    throw new InvalidOperationException($"Patch '{patchName}': malformed pattern step.");
+                }
+                int index = IndexOf(image, step.Find);
+                if (index < 0)
+                {
+                    if (IndexOf(image, write) >= 0)
+                    {
+                        return; // already applied
+                    }
+                    throw new InvalidOperationException($"Patch '{patchName}': could not locate its target bytes (unexpected build or a " + "preceding patch changed this region).");
+                }
+                Buffer.BlockCopy(write, 0, image, index, write.Length);
+            }
+        }
+        else if (questStep is not null)
+        {
+            if (questStep.Offset >= 0 && questStep.Length >= 0 && questStep.RVA >= 0 && questStep.ImageSize >= 0 && questStep.QuestRanges is not null)
+            {
+                try
+                {
+                    QuestLogPatcher.ValidatePeLayout(image, "VanillaWoW");
 
-            Buffer.BlockCopy(step.Write, 0, image, index, step.Write.Length);
+                    ushort sections = QuestLogPatcher.ByteHelpers.GetNumberOfSections(image);
+                    if (sections != 6)
+                    {
+                        throw new InvalidDataException($"Executable expected 6 sections, found {sections}.");
+                    }
+
+                    int sectionTableOffset = QuestLogPatcher.ByteHelpers.GetSectionTableOffset(image);
+
+                    // The seventh section header slot must already exist in the PE header area.
+                    int slot7Offset = sectionTableOffset + (6 * 40);
+
+                    if (!image.AsSpan(slot7Offset, 40).ToArray().All(b => b == 0))
+                    {
+                        throw new InvalidDataException("PE header has no free slot at the expected seventh-section header.");
+                    }
+
+                    if (image.Length != questStep.Offset)
+                    {
+                        throw new InvalidDataException($"Unexpected file size. Expected 0x{questStep.Offset:X}, found 0x{image.Length:X}.");
+                    }
+
+                    byte[][] questData = [.. questStep.QuestRanges.Select(r => r.RangeContent.ToArray())];
+
+                    byte[] sectionHeader = [.. questStep.SectionHeaderBytes];
+                    byte[] sectionPayload = [.. questStep.SectionPayloadBytes];
+
+                    if (sectionHeader.Length != 40)
+                    {
+                        throw new InvalidDataException("Embedded .octoql section header is not 40 bytes.");
+                    }
+
+                    if (sectionPayload.Length != questStep.Length)
+                    {
+                        throw new InvalidDataException($"Embedded .octoql payload has unexpected size: 0x{sectionPayload.Length:X}.");
+                    }
+
+                    byte[] patched = (byte[])image.Clone();
+
+                    // 1. Transplant the quest-log implementation.
+                    for (int r = 0; r < questStep.QuestRanges.Count; r++)
+                    {
+                        var range = questStep.QuestRanges[r];
+                        byte[] data = questData[r];
+
+                        if (data.Length != range.RangeEnd - range.RangeStart)
+                        {
+                            log.Error($"Embedded quest range 0x{range.RangeStart:X}-0x{range.RangeEnd:X} has an unexpected size.");
+                        }
+
+                        if (range.RangeEnd > patched.Length)
+                        {
+                            log.Error("Quest patch range exceeds executable size.");
+                        }
+
+                        Buffer.BlockCopy(data, 0, patched, range.RangeStart, data.Length);
+                    }
+
+                    // 2. Add the .octoql seventh section header.
+                    Buffer.BlockCopy(sectionHeader, 0, patched, sectionTableOffset + (6 * 40), sectionHeader.Length);
+
+                    // 3. Update PE header: NumberOfSections 6 -> 7 and SizeOfImage.
+                    int peOffset = QuestLogPatcher.ByteHelpers.ReadInt32(image, 0x3C);
+                    QuestLogPatcher.ByteHelpers.WriteUInt16(patched, peOffset + 6, 7);
+
+                    int optionalHeaderOffset = peOffset + 24;
+                    QuestLogPatcher.ByteHelpers.WriteUInt32(patched, optionalHeaderOffset + 56, (uint)questStep.ImageSize);
+
+                    // 4. Append the .octoql raw payload.
+                    using (var ms = new MemoryStream(patched.Length + questStep.Length))
+                    {
+                        ms.Write(patched, 0, patched.Length);
+                        ms.Write(sectionPayload, 0, sectionPayload.Length);
+                        patched = ms.ToArray();
+                    }
+
+                    // Structural verification.
+                    var isLayoutValid = QuestLogPatcher.ValidatePeLayout(patched, "patched executable");
+                    var isQuestBytesValid = QuestLogPatcher.VerifyPatchedQuestBytes(patched, questData, questStep.QuestRanges);
+                    var isSectionValid = QuestLogPatcher.VerifySection(patched, questStep);
+
+                    if (!isLayoutValid && !isQuestBytesValid && !isSectionValid)
+                    {
+                        log.Error("Patched executable failed structural verification: PE layout, quest bytes, and section header are all invalid.");
+                    }
+
+                    // Update the image reference
+                    image = patched;
+                }
+                catch (Exception ex)
+                {
+                    log.Error($"Error applying quest log patch: {ex.Message}");
+                }
+            }
         }
     }
 
@@ -324,7 +449,7 @@ public sealed class PatchService
     /// pristine backup may already carry. Offset-mode only - every current WriteOff-bearing step is
     /// offset-based, so pattern-mode (Offset &lt; 0) is deliberately left unsupported here.
     /// </summary>
-    private static void ApplyOffStep(byte[] image, PatchStep step, string patchName)
+    private static void ApplyOffStep(ref byte[] image, PatchStep step, string patchName)
     {
         if (step.Offset < 0 || step.WriteOff is not { Length: > 0 } writeOff)
         {
@@ -348,9 +473,10 @@ public sealed class PatchService
         // normal case - a community client's baked-in tweak) or one of its AcceptBefore fingerprints
         // (already pristine, so this is a genuine no-op once BlockCopy below runs). Anything else
         // means the exe isn't what we think it is; abort rather than write blind.
-        bool recognizedOn = RegionEquals(image, offset, step.Write);
+        bool recognizedOn = RegionEquals(image, offset, step.Write ?? [0x00]);
+        byte[] localImage = image;
         bool recognizedBefore = step.AcceptBefore is { Length: > 0 } fingerprints &&
-            fingerprints.Any(expected => RegionEquals(image, offset, expected));
+            fingerprints.Any(expected => expected is not null && RegionEquals(localImage, offset, expected));
         if (!recognizedOn && !recognizedBefore)
         {
             throw new InvalidOperationException(
@@ -365,10 +491,10 @@ public sealed class PatchService
     {
         if (step.Offset >= 0)
         {
-            return RegionEquals(image, checked((int)step.Offset), step.Write);
+            return RegionEquals(image, checked((int)step.Offset), step.Write ?? [0x00]);
         }
 
-        return IndexOf(image, step.Write) >= 0 && (step.Find is null || IndexOf(image, step.Find) < 0);
+        return IndexOf(image, step.Write ?? [0x00]) >= 0 && (step.Find is null || IndexOf(image, step.Find!) < 0);
     }
 
     private static bool RegionEquals(byte[] image, int offset, byte[] expected)
@@ -389,8 +515,8 @@ public sealed class PatchService
         return true;
     }
 
-    private static IReadOnlyList<PatchDefinition> OrderedForApply(IReadOnlyList<PatchDefinition> catalog)
-        => catalog.OrderBy(p => (int)p.Category).ToList();
+    private static List<PatchDefinition> OrderedForApply(IReadOnlyList<PatchDefinition> catalog)
+        => [.. catalog.OrderBy(p => (int)p.Category)];
 
     private static int IndexOf(byte[] haystack, byte[] needle, int start = 0)
     {

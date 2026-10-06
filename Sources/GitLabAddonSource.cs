@@ -25,8 +25,11 @@ namespace TeronWoWLauncher.Sources;
 /// owner/repo, GitLab paths can be nested (group/subgroup/project), so the whole path after
 /// "gitlab.com/" is captured and used as-is rather than split into exactly two components.
 /// </summary>
-public sealed class GitLabAddonSource : IAddonSource
+public sealed partial class GitLabAddonSource : IAddonSource
 {
+    [GeneratedRegex(@"gitlab\.com/(?<path>[^\s#?]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled, "en-US")]
+    private static partial Regex GitLabAddonRepoRegEx();
+
     // Captures broadly (everything after "gitlab.com/" up to whitespace/#/?) rather than trying to
     // pin down the exact repo-path boundary in the regex itself - GitLab's web UI URLs append a
     // "/-/tree/<branch>" or "/-/blob/<branch>/<file>" route suffix that a plain owner/repo capture
@@ -34,13 +37,11 @@ public sealed class GitLabAddonSource : IAddonSource
     // (group/subgroup/project). ParseRepoPath does the actual trimming afterward, the same
     // "capture broad, then parse the substring" approach MarketplaceService uses for its own
     // two-pass HTML parsing.
-    private static readonly Regex RepoRegex =
-        new(@"gitlab\.com/(?<path>[^\s#?]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex RepoRegex = GitLabAddonRepoRegEx();
 
     private readonly Logger _log = Logger.Instance;
 
-    public bool CanHandle(string input)
-        => input.Contains("gitlab.com", StringComparison.OrdinalIgnoreCase) && RepoRegex.IsMatch(input);
+    public bool CanHandle(string input) => input.Contains("gitlab.com", StringComparison.OrdinalIgnoreCase) && RepoRegex.IsMatch(input);
 
     public async Task<AddonDownload> DownloadAsync(string input, HttpClient http, CancellationToken ct)
     {
@@ -120,7 +121,7 @@ public sealed class GitLabAddonSource : IAddonSource
     /// </summary>
     private static string? ResolveRemoteHeadSha(string cloneUrl)
     {
-        List<Reference> refs = Repository.ListRemoteReferences(cloneUrl).ToList();
+        List<Reference> refs = [.. Repository.ListRemoteReferences(cloneUrl)];
         Reference? head = refs.FirstOrDefault(r => r.CanonicalName == "HEAD");
         if (head is null)
         {
@@ -158,7 +159,7 @@ public sealed class GitLabAddonSource : IAddonSource
         {
             string branchName = repo.Head.FriendlyName;
             Remote origin = repo.Network.Remotes["origin"];
-            Commands.Fetch(repo, origin.Name, Array.Empty<string>(), null, "addon update check");
+            Commands.Fetch(repo, origin.Name, [], null, "addon update check");
 
             Branch? remoteBranch = repo.Branches[$"origin/{branchName}"];
             if (remoteBranch is not null)

@@ -45,7 +45,7 @@ public sealed class DirectorySettings
     public string Realmlist { get; set; } = string.Empty;
 
     /// <summary>Ids of executable patches the user has enabled (applied in fixed catalog order).</summary>
-    public List<string> EnabledPatchIds { get; set; } = new();
+    public List<string> EnabledPatchIds { get; set; } = [];
 
     /// <summary>
     /// True once this directory's default-enabled patches (see <see cref="PatchDefinition.DefaultEnabled"/>,
@@ -57,7 +57,7 @@ public sealed class DirectorySettings
     public bool PatchDefaultsSeeded { get; set; }
 
     /// <summary>Chosen values for parameterized patches, keyed by patch id.</summary>
-    public Dictionary<string, double> PatchParameters { get; set; } = new();
+    public Dictionary<string, double> PatchParameters { get; set; } = [];
 
     /// <summary>
     /// Signature of the patch selection last written to WoW.exe. When it matches the current
@@ -80,7 +80,7 @@ public sealed class DirectorySettings
     /// DLL file names the user has explicitly dismissed from the DLLs tab's "detected" scan (e.g.
     /// files that aren't actually meant for injection). Never offered again until un-ignored in Settings.
     /// </summary>
-    public List<string> IgnoredDetectedDlls { get; set; } = new();
+    public List<string> IgnoredDetectedDlls { get; set; } = [];
 
     /// <summary>Forces the WTF/Config.WTF settings some HD/visual MPQ patches require (see
     /// ConfigWtfService.RequiredSettings), re-applied at the start of every Play so it survives the
@@ -93,5 +93,5 @@ public sealed class DirectorySettings
     /// cleared when it goes on→off, so every on/off cycle restores exactly what it changed and nothing
     /// from an earlier cycle.
     /// </summary>
-    public Dictionary<string, string?> ConfigWtfOriginalValues { get; set; } = new();
+    public Dictionary<string, string?> ConfigWtfOriginalValues { get; set; } = [];
 }

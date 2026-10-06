@@ -15,18 +15,20 @@ namespace TeronWoWLauncher.Services.Patching;
 /// Base Blizzard archives (patch.mpq, patch-2.mpq, locale patches, dbc/model/… .mpq) never match this
 /// pattern and are therefore never touched or listed.
 /// </summary>
-public sealed class MpqPatchService
+public sealed partial class MpqPatchService
 {
+    [GeneratedRegex(@"^(?<disabled>_)?patch-(?<letter>[A-Za-z])\.mpq$", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant)]
+    private static partial Regex CustomMPQPatchRegEx();
+
     private const string DataFolderName = "Data";
 
     // Matches custom patches only: an optional leading underscore (disabled), then patch-<letter>.mpq.
     private static readonly Regex CustomPatchRegex =
-        new(@"^(?<disabled>_)?patch-(?<letter>[A-Za-z])\.mpq$",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        CustomMPQPatchRegEx();
 
     private readonly Logger _log = Logger.Instance;
 
-    public string DataDirectory(string wowDir) => Path.Combine(wowDir, DataFolderName);
+    public static string DataDirectory(string wowDir) => Path.Combine(wowDir, DataFolderName);
 
     /// <summary>All custom MPQ patches in the Data folder, sorted by slot letter. Best-effort: a
     /// transient scan failure (locked folder, permissions hiccup) degrades to "none found" rather
@@ -44,7 +46,7 @@ public sealed class MpqPatchService
         List<string> files;
         try
         {
-            files = Directory.EnumerateFiles(data, "*.mpq").ToList();
+            files = [.. Directory.EnumerateFiles(data, "*.mpq")];
         }
         catch (Exception ex)
         {
@@ -69,7 +71,7 @@ public sealed class MpqPatchService
             });
         }
 
-        return result.OrderBy(p => p.Letter, System.StringComparer.Ordinal).ToList();
+        return [.. result.OrderBy(p => p.Letter, System.StringComparer.Ordinal)];
     }
 
     /// <summary>Enable or disable a patch by renaming between patch-X.mpq and _patch-X.mpq.</summary>
@@ -134,6 +136,5 @@ public sealed class MpqPatchService
         }
     }
 
-    private static string EnabledName(string letter, bool enabled)
-        => (enabled ? string.Empty : "_") + $"patch-{letter}.mpq";
+    private static string EnabledName(string letter, bool enabled) => (enabled ? string.Empty : "_") + $"patch-{letter}.mpq";
 }

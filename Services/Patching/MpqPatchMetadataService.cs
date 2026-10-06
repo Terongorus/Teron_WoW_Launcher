@@ -142,7 +142,7 @@ public sealed class MpqPatchMetadataService
         Save(wowDir);
     }
 
-    private void ApplyEditableField(bool isUserEditable, string? submittedValue, string? existingValue, bool? existingIsExtracted, out string? value, out bool isExtracted)
+    private static void ApplyEditableField(bool isUserEditable, string? submittedValue, string? existingValue, bool? existingIsExtracted, out string? value, out bool isExtracted)
     {
         if (isUserEditable)
         {

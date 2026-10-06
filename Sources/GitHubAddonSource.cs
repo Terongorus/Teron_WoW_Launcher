@@ -31,15 +31,16 @@ namespace TeronWoWLauncher.Sources;
 /// to that quota, and a commit sha is an unambiguous, single-format signature with no release-vs-
 /// branch mode-flapping possible.
 /// </summary>
-public sealed class GitHubAddonSource : IAddonSource
+public sealed partial class GitHubAddonSource : IAddonSource
 {
-    private static readonly Regex RepoRegex =
-        new(@"github\.com/(?<owner>[^/\s]+)/(?<repo>[^/\s#?]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"github\.com/(?<owner>[^/\s]+)/(?<repo>[^/\s#?]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled, "en-US")]
+    private static partial Regex GitHubAddonRepoRegEx();
+
+    private static readonly Regex RepoRegex = GitHubAddonRepoRegEx();
 
     private readonly Logger _log = Logger.Instance;
 
-    public bool CanHandle(string input)
-        => input.Contains("github.com", StringComparison.OrdinalIgnoreCase) && RepoRegex.IsMatch(input);
+    public bool CanHandle(string input) => input.Contains("github.com", StringComparison.OrdinalIgnoreCase) && RepoRegex.IsMatch(input);
 
     public async Task<AddonDownload> DownloadAsync(string input, HttpClient http, CancellationToken ct)
     {
@@ -104,7 +105,7 @@ public sealed class GitHubAddonSource : IAddonSource
     /// </summary>
     private static string? ResolveRemoteHeadSha(string cloneUrl)
     {
-        List<Reference> refs = Repository.ListRemoteReferences(cloneUrl).ToList();
+        List<Reference> refs = [.. Repository.ListRemoteReferences(cloneUrl)];
         Reference? head = refs.FirstOrDefault(r => r.CanonicalName == "HEAD");
         if (head is null)
         {
@@ -142,7 +143,7 @@ public sealed class GitHubAddonSource : IAddonSource
         {
             string branchName = repo.Head.FriendlyName;
             Remote origin = repo.Network.Remotes["origin"];
-            Commands.Fetch(repo, origin.Name, Array.Empty<string>(), null, "addon update check");
+            Commands.Fetch(repo, origin.Name, [], null, "addon update check");
 
             Branch? remoteBranch = repo.Branches[$"origin/{branchName}"];
             if (remoteBranch is not null)

@@ -40,7 +40,7 @@ public sealed class InstalledAddon
     public string? RemoteVersionSignature { get; set; }
 
     /// <summary>The AddOns subfolder names this addon installed (an archive may contain several).</summary>
-    public List<string> Folders { get; set; } = new();
+    public List<string> Folders { get; set; } = [];
 
     /// <summary>
     /// User-chosen on-disk folder names, keyed by the repo/.toc-derived canonical name they replace.
@@ -49,7 +49,7 @@ public sealed class InstalledAddon
     /// canonical name on the next re-install — <see cref="SourceRef"/> is untouched by a rename, so
     /// update-checking keeps comparing against the same remote regardless.
     /// </summary>
-    public Dictionary<string, string> FolderRenames { get; set; } = new();
+    public Dictionary<string, string> FolderRenames { get; set; } = [];
 
     public DateTime InstalledUtc { get; set; }
 

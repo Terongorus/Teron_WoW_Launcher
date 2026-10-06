@@ -1,7 +1,4 @@
-using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Text.RegularExpressions;
 
 using TeronWoWLauncher.Services.Core;
@@ -16,8 +13,11 @@ namespace TeronWoWLauncher.Services.Launch;
 /// Every edit here preserves every other line (comments, unrelated keys, the multisample CVar,
 /// ordering) byte-for-byte, touching only the specific key(s) requested.
 /// </summary>
-public sealed class ConfigWtfService
+public sealed partial class ConfigWtfService
 {
+    [GeneratedRegex(@"^\s*SET\s+(\S+)\s+""([^""]*)""\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled, "en-US")]
+    private static partial Regex ConfigWTFParserRegEx();
+
     private const string RelativePath = "WTF\\Config.WTF";
 
     /// <summary>
@@ -25,7 +25,7 @@ public sealed class ConfigWtfService
     /// Defined once so the Tweaks-tab description and the actual write can't drift apart.
     /// </summary>
     public static readonly (string Key, string Value)[] RequiredSettings =
-    {
+    [
         ("gxApi", "d3d9"),
         ("M2UseShaders", "1"),
         ("M2UsePixelShaders", "1"),
@@ -33,16 +33,15 @@ public sealed class ConfigWtfService
         ("gxColorBits", "24"),
         ("gxDepthBits", "24"),
         ("M2Faster", "3"),
-    };
+    ];
 
     // Key is bare; value is quoted - e.g. SET gxApi "d3d9". Blizzard's own writer casing on the key
     // isn't guaranteed, so matching is case-insensitive.
-    private static readonly Regex SetLine = new(
-        @"^\s*SET\s+(\S+)\s+""([^""]*)""\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex SetLine = ConfigWTFParserRegEx();
 
     private readonly Logger _log = Logger.Instance;
 
-    public string ConfigWtfPath(string wowDir) => Path.Combine(wowDir, RelativePath);
+    public static string ConfigWtfPath(string wowDir) => Path.Combine(wowDir, RelativePath);
 
     /// <summary>
     /// The current value of a single key, or null if absent (or the file/folder doesn't exist yet -
@@ -96,20 +95,20 @@ public sealed class ConfigWtfService
     /// what lets this be safely re-run at the start of every Play session (the client itself may have
     /// legitimately rewritten gxColorBits/gxDepthBits between sessions via the video dropdown).
     /// </summary>
-    public void ApplyRequiredSettings(string wowDir)
+    public static void ApplyRequiredSettings(string wowDir)
         => Upsert(wowDir, RequiredSettings.Select(s => (s.Key, (string?)s.Value)));
 
     /// <summary>
     /// Restore each key to the value captured before the toggle last forced it. A null value means the
     /// key didn't exist before we touched it, so it's removed entirely rather than left behind.
     /// </summary>
-    public void RestoreValues(string wowDir, IReadOnlyDictionary<string, string?> originalValues)
+    public static void RestoreValues(string wowDir, IReadOnlyDictionary<string, string?> originalValues)
         => Upsert(wowDir, originalValues.Select(kv => (kv.Key, kv.Value)));
 
-    private void Upsert(string wowDir, IEnumerable<(string Key, string? Value)> edits)
+    private static void Upsert(string wowDir, IEnumerable<(string Key, string? Value)> edits)
     {
         string path = ConfigWtfPath(wowDir);
-        List<string> lines = File.Exists(path) ? File.ReadAllLines(path).ToList() : new List<string>();
+        List<string> lines = File.Exists(path) ? [.. File.ReadAllLines(path)] : [];
 
         foreach ((string key, string? value) in edits)
         {

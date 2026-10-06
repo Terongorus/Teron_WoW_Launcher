@@ -1,5 +1,3 @@
-using System;
-using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -51,8 +49,10 @@ public sealed class GameInjector
             throw new InvalidOperationException("Could not resolve kernel32!LoadLibraryW.");
         }
 
-        var startupInfo = new Kernel32.STARTUPINFO();
-        startupInfo.cb = Marshal.SizeOf<Kernel32.STARTUPINFO>();
+        var startupInfo = new Kernel32.STARTUPINFO
+        {
+            cb = Marshal.SizeOf<Kernel32.STARTUPINFO>()
+        };
 
         // Give CreateProcess a writable command-line buffer (it may modify it in place).
         var commandLine = new StringBuilder("\"" + fullExe + "\"", 1024);
@@ -98,7 +98,7 @@ public sealed class GameInjector
         }
 
         _log.Info("All DLLs injected; resuming game.");
-        Kernel32.ResumeThread(pi.hThread);
+        _ = Kernel32.ResumeThread(pi.hThread);
 
         int pid = pi.dwProcessId;
         CloseHandles(pi);

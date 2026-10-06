@@ -20,7 +20,7 @@ public sealed class LauncherSettings
     /// (e.g. login2/login3 during downtime) doesn't require retyping the address each time. Global
     /// rather than per-directory - useful regardless of which installation is currently selected.
     /// </summary>
-    public List<string> RealmlistHistory { get; set; } = new();
+    public List<string> RealmlistHistory { get; set; } = [];
 
     /// <summary>
     /// Every WoW directory this launcher has been pointed at and confirmed to exist, most-recently-
@@ -30,7 +30,7 @@ public sealed class LauncherSettings
     /// addons/tweaks/credentials via DirectorySettings. Pruned of any entry that no longer exists on
     /// disk each time it's refreshed.
     /// </summary>
-    public List<string> ManagedDirectories { get; set; } = new();
+    public List<string> ManagedDirectories { get; set; } = [];
 
     /// <summary>Launcher version last shown via the "what's new" popup. Null on first run — no
     /// popup then, since there's nothing to compare against.</summary>
@@ -43,7 +43,7 @@ public sealed class LauncherSettings
     /// MainWindow.SeedDefaultClientProfilesIfNeeded) if this list is still empty; the user can freely
     /// add, edit, or delete rows afterward, including the seeded ones.
     /// </summary>
-    public List<ClientProfile> ClientProfiles { get; set; } = new();
+    public List<ClientProfile> ClientProfiles { get; set; } = [];
 
     // --- Window placement, restored on the next launch. Null = use the XAML defaults (first run,
     // or the saved position no longer falls on any connected monitor). Named to avoid colliding with

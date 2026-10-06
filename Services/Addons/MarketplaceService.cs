@@ -26,8 +26,51 @@ public sealed record LegacyWowCategory(int Id, string Name);
 /// forceRefresh escape hatch (wired to the Browse UI's Refresh button) that bypasses the cache read
 /// entirely rather than just shortening it.
 /// </summary>
-public sealed class MarketplaceService
+public sealed partial class MarketplaceService
 {
+    [GeneratedRegex(@"<tr>(?<row>.*?)</tr>", RegexOptions.Compiled | RegexOptions.Singleline)]
+    private static partial Regex LegacyWoWRowRegex();
+    [GeneratedRegex(@"href=""(?<url>https://legacy-wow\.com/vanilla-addons/[^""]+/)"".*?<div class=""AddonTitleDesc"">\s*<a[^>]*>(?<name>[^<]+)</a>\s*</div>\s*<div>(?<desc>[^<]*)</div>.*?<center>(?<downloads>\d+)</center>", RegexOptions.Compiled | RegexOptions.Singleline)]
+    private static partial Regex LegacyWoWFieldsRegEx();
+    [GeneratedRegex(@"data-original=""(?<thumb>[^""]+)""", RegexOptions.Compiled)]
+    private static partial Regex LegacyWoWThumbRegEx();
+    [GeneratedRegex(@"<a class=""card addon-card-wrapper[^""]*""\s*href=""(?<url>[^""]+)""\s*data-addon-id=""(?<id>\d+)"".*?data-src=""(?<thumb>[^""]+)"".*?addon-name-header[^>]*>\s*(?<name>[^<]+?)\s*(?:<span[^>]*>\s*by\s*(?<author>[^<]+)</span>)?\s*</div>.*?addon-description-text[^>]*>\s*(?<desc>[^<]*?)\s*</div>", RegexOptions.Compiled | RegexOptions.Singleline)]
+    private static partial Regex WarperiaCardRegEx();
+    [GeneratedRegex(@"<div id=""ftwp-postcontent"">(?<body>.*?)</div>\s*</div>\s*<div id=""sidebar-div"">", RegexOptions.Compiled | RegexOptions.Singleline)]
+    private static partial Regex LegacyWoWDetailsContentRegEx();
+    [GeneratedRegex(@"<!--\s*print the content\s*-->(?<body>.*?)</div>\s*<div id=""sidebar-div"">", RegexOptions.Compiled | RegexOptions.Singleline)]
+    private static partial Regex LegacyWoWToolPageContentRegEx();
+    [GeneratedRegex(@"id=""descriptionTab""><div class=""addon-content[^""]*"">(?<body>.*?)</div>\s*</div>\s*<div class=""tab-pane", RegexOptions.Compiled | RegexOptions.Singleline)]
+    private static partial Regex WarperiaDetailContentRegEx();
+    [GeneratedRegex(@"<h[1-6][^>]*>(.*?)</h[1-6]>", RegexOptions.Singleline)]
+    private static partial Regex RegEx_1();
+    [GeneratedRegex(@"<li[^>]*>(.*?)</li>", RegexOptions.Singleline)]
+    private static partial Regex RegEx_2();
+    [GeneratedRegex(@"<img[^>]*\balt=""([^""]*)""[^>]*\bsrc=""([^""]*)""[^>]*/?>")]
+    private static partial Regex RegEx_3();
+    [GeneratedRegex(@"<img[^>]*\bsrc=""([^""]*)""[^>]*\balt=""([^""]*)""[^>]*/?>")]
+    private static partial Regex RegEx_4();
+    [GeneratedRegex(@"<img[^>]*\bsrc=""([^""]*)""[^>]*/?>")]
+    private static partial Regex RegEx_5();
+    [GeneratedRegex(@"<a[^>]*\bhref=""([^""]*)""[^>]*>(.*?)</a>", RegexOptions.Singleline)]
+    private static partial Regex RegEx_6();
+    [GeneratedRegex(@"<(strong|b)[^>]*>(.*?)</\1>", RegexOptions.Singleline)]
+    private static partial Regex RegEx_7();
+    [GeneratedRegex(@"<(em|i)[^>]*>(.*?)</\1>", RegexOptions.Singleline)]
+    private static partial Regex RegEx_8();
+    [GeneratedRegex(@"<br\s*/?>")]
+    private static partial Regex RegEx_9();
+    [GeneratedRegex(@"<p[^>]*>(.*?)</p>", RegexOptions.Singleline)]
+    private static partial Regex RegEx_10();
+    [GeneratedRegex(@"<script[^>]*>.*?</script>", RegexOptions.Singleline)]
+    private static partial Regex RegEx_11();
+    [GeneratedRegex(@"<[^>]+>")]
+    private static partial Regex RegEx_12();
+    [GeneratedRegex(@"[ \t]+\n")]
+    private static partial Regex RegEx_13();
+    [GeneratedRegex(@"\n{3,}")]
+    private static partial Regex RegEx_14();
+
     private static readonly TimeSpan CacheLifetime = TimeSpan.FromHours(24);
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly string CacheDirectory = Path.Combine(AppPaths.DataRoot, "MarketplaceCache");
@@ -48,8 +91,8 @@ public sealed class MarketplaceService
     }
 
     /// <summary>Legacy-WoW's fixed 26 categories (id=137 is "All"), scraped once from its own filter dropdown — this list doesn't change without a site redesign, so it's hardcoded rather than re-scraped every time.</summary>
-    public static readonly IReadOnlyList<LegacyWowCategory> LegacyWowCategories = new List<LegacyWowCategory>
-    {
+    public static readonly IReadOnlyList<LegacyWowCategory> LegacyWowCategories =
+    [
         new(137, "All"), new(138, "Accessories"), new(139, "Action Bars"), new(140, "Artwork"),
         new(141, "Auction & Economy"), new(142, "Audio & Video"), new(143, "Bags & Inventory"),
         new(144, "Boss Encounters"), new(145, "Buffs & Debuffs"), new(146, "Chat & Communications"),
@@ -58,7 +101,7 @@ public sealed class MarketplaceService
         new(155, "Map & Minimap"), new(156, "Miscellaneous"), new(157, "Professions"), new(158, "PvP"),
         new(159, "Quests & Leveling"), new(160, "Roleplay"), new(161, "Tooltip"), new(162, "Unit Frames"),
         new(163, "Addon Pack"),
-    };
+    ];
 
     /// <summary>Warperia's confirmed native sort values (its own "sort by" dropdown) — "az"/"za" have no server-side equivalent, handled client-side in the UI layer instead.</summary>
     public static readonly IReadOnlyList<(string Value, string Label)> WarperiaSortOptions = new List<(string, string)>
@@ -74,17 +117,13 @@ public sealed class MarketplaceService
     // group entirely rather than backtrack to satisfy it, so `data-original` silently never matched
     // even on rows that had it. Splitting the thumbnail into its own unconditional match on the
     // already-isolated row text sidesteps that entirely (verified against the real fetched page).
-    private static readonly Regex LegacyWowRowRegex = new(@"<tr>(?<row>.*?)</tr>", RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex LegacyWowRowRegex = LegacyWoWRowRegex();
 
-    private static readonly Regex LegacyWowFieldsRegex = new(
-        @"href=""(?<url>https://legacy-wow\.com/vanilla-addons/[^""]+/)"".*?<div class=""AddonTitleDesc"">\s*<a[^>]*>(?<name>[^<]+)</a>\s*</div>\s*<div>(?<desc>[^<]*)</div>.*?<center>(?<downloads>\d+)</center>",
-        RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex LegacyWowFieldsRegex = LegacyWoWFieldsRegEx();
 
-    private static readonly Regex LegacyWowThumbRegex = new(@"data-original=""(?<thumb>[^""]+)""", RegexOptions.Compiled);
+    private static readonly Regex LegacyWowThumbRegex = LegacyWoWThumbRegEx();
 
-    private static readonly Regex WarperiaCardRegex = new(
-        @"<a class=""card addon-card-wrapper[^""]*""\s*href=""(?<url>[^""]+)""\s*data-addon-id=""(?<id>\d+)"".*?data-src=""(?<thumb>[^""]+)"".*?addon-name-header[^>]*>\s*(?<name>[^<]+?)\s*(?:<span[^>]*>\s*by\s*(?<author>[^<]+)</span>)?\s*</div>.*?addon-description-text[^>]*>\s*(?<desc>[^<]*?)\s*</div>",
-        RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex WarperiaCardRegex = WarperiaCardRegEx();
 
     /// <summary>Fetches Legacy-WoW's listing for one category (137 = All ≈ 700 addons, single page — no pagination to handle for any category, confirmed against real fetched pages).</summary>
     public async Task<IReadOnlyList<MarketplaceAddonEntry>> FetchLegacyWowCatalogAsync(
@@ -188,7 +227,7 @@ public sealed class MarketplaceService
     /// need none of this — they're plain unauthenticated URLs, loadable directly via
     /// <c>BitmapImage.UriSource</c> in the UI layer without going through this method at all.
     /// </summary>
-    public async Task<byte[]?> FetchThumbnailBytesAsync(string tokenUrl, CancellationToken ct)
+    public static async Task<byte[]?> FetchThumbnailBytesAsync(string tokenUrl, CancellationToken ct)
     {
         try
         {
@@ -205,23 +244,17 @@ public sealed class MarketplaceService
     // real fetched Questie page) lives in <div id="ftwp-postcontent">...</div>, immediately followed
     // by a sibling <div id="sidebar-div"> - capturing everything between those two markers isolates
     // it from the surrounding page chrome without needing a full HTML parser.
-    private static readonly Regex LegacyWowDetailContentRegex = new(
-        @"<div id=""ftwp-postcontent"">(?<body>.*?)</div>\s*</div>\s*<div id=""sidebar-div"">",
-        RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex LegacyWowDetailContentRegex = LegacyWoWDetailsContentRegEx();
 
     // Fallback for Legacy-WoW's other page template - "tool/generator" addon pages (e.g. ABHelper)
     // don't use the ftwp-postcontent wrapper at all; their real content sits right after a
     // "print the content" PHP comment, still followed by the same sidebar-div marker. Verified
     // against the real fetched ABHelper page, which has zero ftwp-postcontent matches.
-    private static readonly Regex LegacyWowToolPageContentRegex = new(
-        @"<!--\s*print the content\s*-->(?<body>.*?)</div>\s*<div id=""sidebar-div"">",
-        RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex LegacyWowToolPageContentRegex = LegacyWoWToolPageContentRegEx();
 
     // Warperia's description tab: <div class="tab-pane ... " id="descriptionTab"><div class="addon-content ...">BODY</div></div><div class="tab-pane ... " id="imagesTab">
     // The next tab-pane's id marks the end, the same "isolate between two real markers" approach as above.
-    private static readonly Regex WarperiaDetailContentRegex = new(
-        @"id=""descriptionTab""><div class=""addon-content[^""]*"">(?<body>.*?)</div>\s*</div>\s*<div class=""tab-pane",
-        RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex WarperiaDetailContentRegex = WarperiaDetailContentRegEx();
 
     /// <summary>
     /// Fetches and converts one addon's own detail-page description to Markdown, for the Browse
@@ -229,7 +262,7 @@ public sealed class MarketplaceService
     /// separate from <see cref="MarketplaceAddonEntry.Description"/>, which is only the short
     /// one-line blurb shown in the listing row, not the addon's real page content.
     /// </summary>
-    public async Task<string> FetchAddonDetailsMarkdownAsync(MarketplaceAddonEntry entry, CancellationToken ct)
+    public static async Task<string> FetchAddonDetailsMarkdownAsync(MarketplaceAddonEntry entry, CancellationToken ct)
     {
         string html = await Http.GetStringAsync(entry.DetailUrl, ct);
 
@@ -265,21 +298,21 @@ public sealed class MarketplaceService
     private static string HtmlFragmentToMarkdown(string html)
     {
         string text = html;
-        text = Regex.Replace(text, @"<h[1-6][^>]*>(.*?)</h[1-6]>", "\n#### $1\n", RegexOptions.Singleline);
-        text = Regex.Replace(text, @"<li[^>]*>(.*?)</li>", "- $1\n", RegexOptions.Singleline);
-        text = Regex.Replace(text, @"<img[^>]*\balt=""([^""]*)""[^>]*\bsrc=""([^""]*)""[^>]*/?>", "![$1]($2)");
-        text = Regex.Replace(text, @"<img[^>]*\bsrc=""([^""]*)""[^>]*\balt=""([^""]*)""[^>]*/?>", "![$2]($1)");
-        text = Regex.Replace(text, @"<img[^>]*\bsrc=""([^""]*)""[^>]*/?>", "![]($1)");
-        text = Regex.Replace(text, @"<a[^>]*\bhref=""([^""]*)""[^>]*>(.*?)</a>", "[$2]($1)", RegexOptions.Singleline);
-        text = Regex.Replace(text, @"<(strong|b)[^>]*>(.*?)</\1>", "**$2**", RegexOptions.Singleline);
-        text = Regex.Replace(text, @"<(em|i)[^>]*>(.*?)</\1>", "*$2*", RegexOptions.Singleline);
-        text = Regex.Replace(text, @"<br\s*/?>", "\n");
-        text = Regex.Replace(text, @"<p[^>]*>(.*?)</p>", "\n$1\n", RegexOptions.Singleline);
-        text = Regex.Replace(text, @"<script[^>]*>.*?</script>", "", RegexOptions.Singleline);
-        text = Regex.Replace(text, @"<[^>]+>", "");
+        text = RegEx_1().Replace(text, "\n#### $1\n");
+        text = RegEx_2().Replace(text, "- $1\n");
+        text = RegEx_3().Replace(text, "![$1]($2)");
+        text = RegEx_4().Replace(text, "![$2]($1)");
+        text = RegEx_5().Replace(text, "![]($1)");
+        text = RegEx_6().Replace(text, "[$2]($1)");
+        text = RegEx_7().Replace(text, "**$2**");
+        text = RegEx_8().Replace(text, "*$2*");
+        text = RegEx_9().Replace(text, "\n");
+        text = RegEx_10().Replace(text, "\n$1\n");
+        text = RegEx_11().Replace(text, "");
+        text = RegEx_12().Replace(text, "");
         text = WebUtility.HtmlDecode(text);
-        text = Regex.Replace(text, @"[ \t]+\n", "\n");
-        text = Regex.Replace(text, @"\n{3,}", "\n\n");
+        text = RegEx_13().Replace(text, "\n");
+        text = RegEx_14().Replace(text, "\n\n");
         return text.Trim();
     }
 
@@ -333,6 +366,6 @@ public sealed class MarketplaceService
     private sealed class CacheEnvelope
     {
         public DateTimeOffset FetchedAt { get; set; }
-        public List<MarketplaceAddonEntry> Entries { get; set; } = new();
+        public List<MarketplaceAddonEntry> Entries { get; set; } = [];
     }
 }

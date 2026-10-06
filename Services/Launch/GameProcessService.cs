@@ -12,7 +12,7 @@ namespace TeronWoWLauncher.Services.Launch;
 public sealed class GameProcessService
 {
     /// <summary>True if a running "WoW" process's executable path is inside <paramref name="wowDir"/>.</summary>
-    public bool IsRunning(string wowDir)
+    public static bool IsRunning(string wowDir)
     {
         // No directory configured yet (a real, reachable state now that the launcher no longer
         // assumes a fallback location) - Path.GetFullPath rejects "" outright, and there's nothing

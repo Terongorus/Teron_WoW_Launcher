@@ -56,14 +56,14 @@ public partial class MainWindow : Window
     private readonly LauncherUpdateService _launcherUpdate = new();
     private readonly MarketplaceService _marketplace = new();
 
-    private readonly List<PatchControl> _patchControls = new();
-    private readonly ObservableCollection<DllInfo> _dllItems = new();
-    private readonly ObservableCollection<DllInfo> _detectedDllItems = new();
-    private readonly ObservableCollection<string> _ignoredDllItems = new();
-    private readonly ObservableCollection<InstalledAddon> _addonItems = new();
-    private readonly ObservableCollection<LogEntry> _logItems = new();
-    private readonly ObservableCollection<string> _realmlistHistoryItems = new();
-    private readonly ObservableCollection<string> _managedDirectoryItems = new();
+    private readonly List<PatchControl> _patchControls = [];
+    private readonly ObservableCollection<DllInfo> _dllItems = [];
+    private readonly ObservableCollection<DllInfo> _detectedDllItems = [];
+    private readonly ObservableCollection<string> _ignoredDllItems = [];
+    private readonly ObservableCollection<InstalledAddon> _addonItems = [];
+    private readonly ObservableCollection<LogEntry> _logItems = [];
+    private readonly ObservableCollection<string> _realmlistHistoryItems = [];
+    private readonly ObservableCollection<string> _managedDirectoryItems = [];
 
     private readonly DispatcherTimer _patchApplyTimer = new() { Interval = TimeSpan.FromMilliseconds(600) };
     private readonly DispatcherTimer _settingsSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
@@ -857,7 +857,7 @@ public partial class MainWindow : Window
         _dllItems.Clear();
         foreach (string name in _dlls.ReadActiveNames(wowDir))
         {
-            _dllItems.Add(_dllMetadata.Merge(DllMetadataReader.Read(name, _dlls.ResolvePath(wowDir, name)), isTracked: true));
+            _dllItems.Add(_dllMetadata.Merge(DllMetadataReader.Read(name, DllListService.ResolvePath(wowDir, name)), isTracked: true));
         }
     }
 
@@ -865,7 +865,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            _dlls.WriteActiveNames(CurrentWowDir(), _dllItems.Select(d => d.Name).ToList());
+            _dlls.WriteActiveNames(CurrentWowDir(), [.. _dllItems.Select(d => d.Name)]);
         }
         catch (Exception ex)
         {
@@ -931,7 +931,7 @@ public partial class MainWindow : Window
         string wowDir = CurrentWowDir();
         // Re-read fresh (not the already-merged row item) so the dialog can tell which fields the
         // file itself defines (locked) apart from whatever's only in the manual sidecar.
-        DllInfo extracted = DllMetadataReader.Read(item.Name, _dlls.ResolvePath(wowDir, item.Name));
+        DllInfo extracted = DllMetadataReader.Read(item.Name, DllListService.ResolvePath(wowDir, item.Name));
         var dialog = new DllMetadataDialog(extracted, _dllMetadata.Get(item.Name));
         if (ShowModal(dialog) == true)
         {
@@ -969,7 +969,7 @@ public partial class MainWindow : Window
             string wowDir = CurrentWowDir();
             if (!_dllItems.Any(d => string.Equals(d.Name, item.Name, StringComparison.OrdinalIgnoreCase)))
             {
-                _dllItems.Add(_dllMetadata.Merge(DllMetadataReader.Read(item.Name, _dlls.ResolvePath(wowDir, item.Name)), isTracked: true));
+                _dllItems.Add(_dllMetadata.Merge(DllMetadataReader.Read(item.Name, DllListService.ResolvePath(wowDir, item.Name)), isTracked: true));
             }
 
             SaveDllList();
@@ -1046,7 +1046,7 @@ public partial class MainWindow : Window
 
     private void OnUnignoreDlls(object sender, RoutedEventArgs e)
     {
-        List<string> selected = IgnoredDllList.SelectedItems.Cast<string>().ToList();
+        List<string> selected = [.. IgnoredDllList.SelectedItems.Cast<string>()];
         if (selected.Count == 0)
         {
             return;
@@ -1089,7 +1089,7 @@ public partial class MainWindow : Window
         string query = MpqSearchBox.Text.Trim();
         List<MpqPatch> visible = query.Length == 0
             ? patches
-            : patches.Where(p => MatchesMpqSearch(p, query)).ToList();
+            : [.. patches.Where(p => MatchesMpqSearch(p, query))];
 
         if (patches.Count == 0)
         {
@@ -1319,7 +1319,7 @@ public partial class MainWindow : Window
     /// different WoW directory.</summary>
     private async Task ExtractMpqMetadataAsync(string wowDir, MpqPatch patch)
     {
-        string path = Path.Combine(_mpq.DataDirectory(wowDir), patch.FileName);
+        string path = Path.Combine(MpqPatchService.DataDirectory(wowDir), patch.FileName);
         MpqExtractedInfo? info = await Task.Run(() => MpqPatchMetadataExtractor.TryExtract(path));
         _mpqMetadata.ApplyExtracted(wowDir, patch.Letter, path, info?.Title, info?.Author, info?.Description, info?.Version, info?.Website);
 
@@ -1345,10 +1345,8 @@ public partial class MainWindow : Window
         try
         {
             string wowDir = CurrentWowDir();
-            string dataDir = _mpq.DataDirectory(wowDir);
-            List<MpqPatch> pending = _mpq.Scan(wowDir)
-                .Where(p => _mpqMetadata.NeedsExtraction(p.Letter, Path.Combine(dataDir, p.FileName)))
-                .ToList();
+            string dataDir = MpqPatchService.DataDirectory(wowDir);
+            List<MpqPatch> pending = [.. _mpq.Scan(wowDir).Where(p => _mpqMetadata.NeedsExtraction(p.Letter, Path.Combine(dataDir, p.FileName)))];
             if (pending.Count == 0)
             {
                 return;
@@ -1760,9 +1758,7 @@ public partial class MainWindow : Window
     /// install/update path as the per-row Update button (including its single-flight guard).</summary>
     private async void OnUpdateAllAddonsClick(object sender, RoutedEventArgs e)
     {
-        List<InstalledAddon> updatable = _addons.Addons
-            .Where(a => a.HasUpdateAvailable && !string.IsNullOrWhiteSpace(a.SourceRef))
-            .ToList();
+        List<InstalledAddon> updatable = [.. _addons.Addons.Where(a => a.HasUpdateAvailable && !string.IsNullOrWhiteSpace(a.SourceRef))];
 
         if (updatable.Count == 0)
         {
@@ -1873,9 +1869,9 @@ public partial class MainWindow : Window
 
     // ---------------- Addons tab: Browse marketplace (issue #8) ----------------
 
-    private readonly ObservableCollection<MarketplaceRowViewModel> _marketplaceRows = new();
+    private readonly ObservableCollection<MarketplaceRowViewModel> _marketplaceRows = [];
     private readonly Dictionary<string, MarketplaceRowViewModel> _marketplaceRowCache = new(StringComparer.OrdinalIgnoreCase);
-    private List<MarketplaceAddonEntry> _marketplaceEntries = new();
+    private List<MarketplaceAddonEntry> _marketplaceEntries = [];
     private bool _marketplaceInitialized;
     private bool _marketplaceBusy;
     private string _warperiaSort = "popularity";
@@ -1905,7 +1901,11 @@ public partial class MainWindow : Window
             get => _isInstalled;
             set
             {
-                if (_isInstalled == value) return;
+                if (_isInstalled == value)
+                {
+                    return;
+                }
+
                 _isInstalled = value;
                 OnPropertyChanged(nameof(IsInstalled));
                 OnPropertyChanged(nameof(InstallGlyph));
@@ -2098,11 +2098,11 @@ public partial class MainWindow : Window
             if (isLegacyWow)
             {
                 int categoryId = MarketplaceCategoryCombo.SelectedItem is ComboBoxItem { Tag: int id } ? id : 137;
-                fetched = (await _marketplace.FetchLegacyWowCatalogAsync(categoryId, CancellationToken.None, forceRefresh)).ToList();
+                fetched = [.. (await _marketplace.FetchLegacyWowCatalogAsync(categoryId, CancellationToken.None, forceRefresh))];
             }
             else
             {
-                fetched = new List<MarketplaceAddonEntry>();
+                fetched = [];
                 for (int page = 1; page <= WarperiaMaxPages; page++)
                 {
                     IReadOnlyList<MarketplaceAddonEntry> pageEntries =
@@ -2182,8 +2182,11 @@ public partial class MainWindow : Window
         {
             if (!_marketplaceRowCache.TryGetValue(entry.DetailUrl, out MarketplaceRowViewModel? row))
             {
-                row = new MarketplaceRowViewModel { Entry = entry };
-                row.IsInstalled = _addons.Addons.Any(a => string.Equals(a.SourceRef, entry.DetailUrl, StringComparison.OrdinalIgnoreCase));
+                row = new MarketplaceRowViewModel
+                {
+                    Entry = entry,
+                    IsInstalled = _addons.Addons.Any(a => string.Equals(a.SourceRef, entry.DetailUrl, StringComparison.OrdinalIgnoreCase))
+                };
                 _marketplaceRowCache[entry.DetailUrl] = row;
                 // Thumbnail loading is deferred to OnMarketplaceRowLoaded (fired when the row's
                 // container is actually realized by the virtualizing panel) rather than started
@@ -2232,7 +2235,7 @@ public partial class MainWindow : Window
             {
                 // Token-gated - has to go through the same cookie-carrying HttpClient that fetched
                 // the listing page, so it can't just be a plain BitmapImage.UriSource load.
-                byte[]? bytes = await _marketplace.FetchThumbnailBytesAsync(url, CancellationToken.None);
+                byte[]? bytes = await MarketplaceService.FetchThumbnailBytesAsync(url, CancellationToken.None);
                 if (bytes is null)
                 {
                     return;
@@ -2309,7 +2312,7 @@ public partial class MainWindow : Window
         ShowToast("Addons", $"Loading details for '{row.Entry.Name}'...", ToastSeverity.Info, updateKey: "marketplace-details");
         try
         {
-            string markdown = await _marketplace.FetchAddonDetailsMarkdownAsync(row.Entry, CancellationToken.None);
+            string markdown = await MarketplaceService.FetchAddonDetailsMarkdownAsync(row.Entry, CancellationToken.None);
             string repoLinkLabel = row.Entry.Source == "Warperia" ? "View on Warperia" : "View on Legacy-WoW";
             var dialog = new AddonDetailsDialog(row.Entry.Name, markdown, ignoreUpdates: false, row.Entry.DetailUrl,
                 showIgnoreUpdates: false, repoLinkLabel: repoLinkLabel);
@@ -2895,7 +2898,7 @@ public partial class MainWindow : Window
 
         _dirSettings.SetPassword(PasswordBoxInput.Password);
 
-        ds.EnabledPatchIds = new List<string>();
+        ds.EnabledPatchIds = [];
         foreach (PatchControl pc in _patchControls)
         {
             if (pc.Box.IsChecked == true)
@@ -3060,7 +3063,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_processCheck.IsRunning(wowDir))
+        if (GameProcessService.IsRunning(wowDir))
         {
             ShowToast("Launcher",
                 "Close the game to apply the Config.WTF change now — it will also be applied automatically on your next Play.",
@@ -3074,11 +3077,11 @@ public partial class MainWindow : Window
             {
                 _dirSettings.Current.ConfigWtfOriginalValues =
                     _configWtf.ReadAll(wowDir, ConfigWtfService.RequiredSettings.Select(s => s.Key));
-                _configWtf.ApplyRequiredSettings(wowDir);
+                ConfigWtfService.ApplyRequiredSettings(wowDir);
             }
             else
             {
-                _configWtf.RestoreValues(wowDir, _dirSettings.Current.ConfigWtfOriginalValues);
+                ConfigWtfService.RestoreValues(wowDir, _dirSettings.Current.ConfigWtfOriginalValues);
                 _dirSettings.Current.ConfigWtfOriginalValues.Clear();
             }
 
@@ -3130,7 +3133,7 @@ public partial class MainWindow : Window
         try
         {
             string realm = RealmlistBox.Text?.Trim() ?? string.Empty;
-            RealmStatus status = await _realmStatus.CheckAsync(realm);
+            RealmStatus status = await RealmStatusChecker.CheckAsync(realm);
 
             RealmlistStatusDot.Fill = status switch
             {
@@ -3281,7 +3284,7 @@ public partial class MainWindow : Window
     private async void OnRepairGameFiles(object sender, RoutedEventArgs e)
     {
         string wowDir = CurrentWowDir();
-        if (!_install.IsInstalled(wowDir))
+        if (!GameInstallService.IsInstalled(wowDir))
         {
             ShowToast("Settings", "Nothing installed to repair yet.", ToastSeverity.Info);
             return;
@@ -3310,13 +3313,13 @@ public partial class MainWindow : Window
     private async void OnDeleteGameFiles(object sender, RoutedEventArgs e)
     {
         string wowDir = CurrentWowDir();
-        if (!_install.IsInstalled(wowDir))
+        if (!GameInstallService.IsInstalled(wowDir))
         {
             ShowToast("Settings", "Nothing installed to delete.", ToastSeverity.Info);
             return;
         }
 
-        if (!_install.HasInstallManifest(wowDir))
+        if (!GameInstallService.HasInstallManifest(wowDir))
         {
             var noManifest = new ConfirmDialog(
                 "Can't Delete Safely Yet",
@@ -3349,7 +3352,7 @@ public partial class MainWindow : Window
         SetLaunchOperationBusy(true);
         try
         {
-            await Task.Run(() => _install.DeleteInstalledClientFiles(wowDir));
+            await Task.Run(() => GameInstallService.DeleteInstalledClientFiles(wowDir));
             _dirSettings.Current.InstalledClientSignature = null;
             _dirSettings.Save(wowDir);
             ShowToast("Settings", "Game files deleted.", ToastSeverity.Success);
@@ -3564,7 +3567,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnGameRunningTick(object? sender, EventArgs e)
     {
-        bool running = IsTrackedLaunchStillRunning() || _processCheck.IsRunning(CurrentWowDir());
+        bool running = IsTrackedLaunchStillRunning() || GameProcessService.IsRunning(CurrentWowDir());
         if (running == _wowAlreadyRunning)
         {
             return;
@@ -3702,7 +3705,7 @@ public partial class MainWindow : Window
     private async Task RefreshPlayButtonStateAsync()
     {
         string wowDir = CurrentWowDir();
-        if (!_install.IsInstalled(wowDir))
+        if (!GameInstallService.IsInstalled(wowDir))
         {
             SetPlayState(PlayButtonState.Install);
             return;
@@ -3756,7 +3759,7 @@ public partial class MainWindow : Window
         // Play/Install gating (via LoadDirectorySettingsIntoUi's chain) prompts for one afterward either way.
         string? targetProfileId = new DirectorySettingsService().Load(targetDir).ClientProfileId;
         ClientProfile? targetProfile = _settings.Current.ClientProfiles.FirstOrDefault(p => p.Id == targetProfileId);
-        bool alreadyValid = _install.IsInstalled(targetDir) &&
+        bool alreadyValid = GameInstallService.IsInstalled(targetDir) &&
             (targetProfile is null || _install.IsUpToDate(targetDir, targetProfile.Category));
         bool ok;
         if (alreadyValid)
@@ -3883,7 +3886,7 @@ public partial class MainWindow : Window
                 return false;
             }
 
-            _install.DeletePartialDownload();
+            GameInstallService.DeletePartialDownload();
             ShowToast("Launcher", "Download cancelled.", ToastSeverity.Warning);
             return false;
         }
@@ -3990,7 +3993,7 @@ public partial class MainWindow : Window
         if (wasPaused && _pausedDownloadParams is not null)
         {
             _pausedDownloadParams = null;
-            _install.DeletePartialDownload();
+            GameInstallService.DeletePartialDownload();
             // Cancelling while paused otherwise leaves the stripe animation's Clock paused
             // indefinitely - it wouldn't resume on its own for whatever future operation next shows
             // the bar, since only OnPauseResumeClick's own Resume branch normally undoes this.
@@ -4213,10 +4216,10 @@ public partial class MainWindow : Window
         // Speed and ETA both come from the same InstallProgress.BytesPerSecond, so this covers every
         // caller uniformly - client download/repair/update, extraction, and the launcher's own
         // self-update download all report through this one method.
-        string[] parts = {
+        string[] parts = [
             p.BytesPerSecond > 0 ? $"{FormatBytes((long)p.BytesPerSecond)}/s" : string.Empty,
             FormatEta(p.Total - p.Downloaded, p.BytesPerSecond),
-        };
+        ];
         string suffix = string.Join(", ", Array.FindAll(parts, s => s.Length > 0));
         if (suffix.Length > 0)
         {
@@ -4248,7 +4251,7 @@ public partial class MainWindow : Window
 
     private static string FormatBytes(long bytes)
     {
-        string[] units = { "B", "KB", "MB", "GB", "TB" };
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
         double value = bytes;
         int i = 0;
         while (value >= 1024 && i < units.Length - 1)
@@ -4264,7 +4267,7 @@ public partial class MainWindow : Window
     {
         // Belt-and-suspenders against the 2-second poll's own race window: re-check right at the
         // moment of the click rather than trusting whatever OnGameRunningTick last observed.
-        if (IsTrackedLaunchStillRunning() || _processCheck.IsRunning(CurrentWowDir()))
+        if (IsTrackedLaunchStillRunning() || GameProcessService.IsRunning(CurrentWowDir()))
         {
             _wowAlreadyRunning = true;
             UpdatePlayButtonEnabled();
@@ -4312,10 +4315,7 @@ public partial class MainWindow : Window
             }
 
             PatchControl? signatureControl = _patchControls.FirstOrDefault(pc => pc.Def.Id == "signature-removal");
-            if (signatureControl is not null)
-            {
-                signatureControl.Box.IsChecked = true;
-            }
+            signatureControl?.Box.IsChecked = true;
 
             CollectSettingsFromUi();
             _settings.Save();
@@ -4352,7 +4352,7 @@ public partial class MainWindow : Window
         {
             if (!_wowAlreadyRunning)
             {
-                _wowAlreadyRunning = IsTrackedLaunchStillRunning() || _processCheck.IsRunning(CurrentWowDir());
+                _wowAlreadyRunning = IsTrackedLaunchStillRunning() || GameProcessService.IsRunning(CurrentWowDir());
             }
 
             SetLaunchOperationBusy(false);
@@ -4458,7 +4458,7 @@ public partial class MainWindow : Window
         public DispatcherTimer? Timer { get; set; }
     }
 
-    private readonly List<ToastCard> _toastCards = new();
+    private readonly List<ToastCard> _toastCards = [];
 
     /// <summary>
     /// updateKey lets a rapidly-repeating operation (e.g. "Loading catalog… (N so far)" while

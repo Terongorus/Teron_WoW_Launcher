@@ -1,4 +1,3 @@
-using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -40,11 +39,11 @@ public sealed class DirectorySettingsService
     // for it (see StripLegacyFieldsFromGlobalSettings), so a second/third/Nth new directory doesn't
     // just keep re-adopting the same stale snapshot forever.
     private static readonly string[] LegacyPerDirectoryKeys =
-    {
+    [
         "InstalledClientSignature", "Account", "EncryptedPassword", "SavePassword", "AutoLoginEnabled",
         "LoginDelayMs", "Realmlist", "EnabledPatchIds", "PatchParameters", "AppliedPatchSignature",
         "PristineBackupHash", "CleanWdbBeforeLaunch", "IgnoredDetectedDlls", "ClientDownloadUrl",
-    };
+    ];
 
     private readonly Logger _log = Logger.Instance;
 

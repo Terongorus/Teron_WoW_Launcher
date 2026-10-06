@@ -17,7 +17,7 @@ public sealed class GameCacheService
 
     private readonly Logger _log = Logger.Instance;
 
-    public string WdbDir(string wowDir) => Path.Combine(wowDir, WdbFolderName);
+    public static string WdbDir(string wowDir) => Path.Combine(wowDir, WdbFolderName);
 
     /// <summary>Deletes the WDB folder if present. Best-effort: a locked file in there shouldn't
     /// block the launch that triggered this.</summary>
