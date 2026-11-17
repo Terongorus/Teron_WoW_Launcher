@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [2.1.0] - 2026-11-17
+
+### Added
+
+- **Quest Log Patch** (Vanilla+ profiles): adds a configurable PE patch (20–40 quests) that
+  expands the client's quest log capacity beyond the vanilla 20-quest limit (actual in-game cap
+  still depends on the realm backend).
+- **Focus the launcher when the game closes** (Settings → Launcher window): global toggle
+  controlling whether the launcher automatically returns to the foreground after the game exits
+  (enabled by default; uncheck to avoid interrupting single-monitor setups).
+
+### Changed
+
+- Extended the executable patcher to support PE section-append patches alongside classic byte
+  edits, with stricter structural verification and error reporting.
+- Refactored internal services to static helpers and source-generated regexes, and updated
+  `SharpCompress` (0.50.4) and `LibGit2Sharp` (0.32.0).
+
+### Fixed
+
+- Updated the Inno Setup installer script output directory to `Build\InstallerPackage`.
+
 ## [2.0.0] - 2026-08-25
 
 The 2.0.0 pre-release cycle (beta.1 through beta.5), promoted to a stable release, plus one

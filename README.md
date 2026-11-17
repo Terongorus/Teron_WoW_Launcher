@@ -58,7 +58,8 @@ every time you change something — never patching an already-patched file. Spli
 (Signature Removal, Large Address Aware, and a Config.WTF toggle that forces the video settings
 some HD/visual MPQ patches need) — enable all three if you plan to run custom MPQ patches — and
 **Optional**: widescreen field of view (shown in degrees, not raw radians), render/grass/nameplate
-distance, sound channels, sound-while-alt-tabbed, auto-loot, and a camera rotation glitch fix, most
+distance, sound channels, sound-while-alt-tabbed, auto-loot, a camera rotation glitch fix, and
+(on Vanilla+ profiles) a configurable quest log limit patch, most
 with a slider *and* a type-in box for the exact value you want. On TurtleWoW/OctoWoW profiles,
 several of these (LAA, sound-in-background, auto-loot, the camera fix, FoV, nameplate distance)
 ship already baked into the client — they still show up as real, togglable entries (checked by
@@ -116,10 +117,9 @@ Vanilla+), seeded with Kronos, TurtleWoW, and OctoWoW defaults, but freely edita
 with your own. **Repair Game Files**/**Delete Game Files** apply to whichever profile is currently
 selected on Home — Repair re-downloads and reinstalls the whole client from its assigned
 identifier's URL, overwriting anything that differs locally, useful if something's gotten
-corrupted and you don't want to track down which file. Minimizing the launcher the moment the game
-starts (it always comes back to the foreground on its own once the game closes, whether or not
-this is on) lives here too, along with ignored DLLs (see the DLLs tab above), managed individually
-or all at once.
+corrupted and you don't want to track down which file. Minimizing the launcher when the game
+starts and bringing it back to the foreground when the game closes are both configurable here,
+along with ignored DLLs (see the DLLs tab above), managed individually or all at once.
 
 ### Log
 
@@ -164,7 +164,7 @@ own code.
 
 ## Project status
 
-Version 2.0.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
+Version 2.1.0. See [CHANGELOG.md](CHANGELOG.md) for the full history. Versions follow
 `major.minor.hotfix`.
 
 ## Potential future features

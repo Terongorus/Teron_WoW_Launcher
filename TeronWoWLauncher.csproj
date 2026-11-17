@@ -41,7 +41,7 @@
     IsNewer's System.Version comparison works unchanged against a 4-part current version.
   -->
   <PropertyGroup>
-    <MajorMinorPatchVersion>2.0.0</MajorMinorPatchVersion>
+    <MajorMinorPatchVersion>2.1.0</MajorMinorPatchVersion>
     <BuildNumberFile>$(MSBuildProjectDirectory)\BuildNumber.txt</BuildNumberFile>
   </PropertyGroup>
 
