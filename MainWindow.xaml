@@ -1250,6 +1250,18 @@
               <TextBlock Style="{StaticResource MicroText}" TextWrapping="Wrap" Margin="0,0,0,20"
                          Text="When enabled, the launcher automatically comes back to the foreground once the game closes."/>
 
+              <DockPanel LastChildFill="True">
+                <TextBlock DockPanel.Dock="Left" Text="&#xE774;" FontFamily="Segoe Fluent Icons"
+                           FontSize="14" Foreground="{StaticResource InstallActionBrush}"
+                           VerticalAlignment="Center" Margin="0,0,6,0" ToolTip="Global setting"/>
+                <TextBlock Style="{StaticResource Heading3Text}" Text="Launcher updates"/>
+              </DockPanel>
+              <CheckBox x:Name="IgnoreUpdatesCheck" Content="Ignore updates" Margin="0,4,0,4"/>
+              <TextBlock Style="{StaticResource MicroText}" TextWrapping="Wrap" Margin="0,0,0,8"
+                         Text="When enabled, newer launcher releases found on GitHub Releases are always ignored."/>
+              <Button x:Name="CheckForUpdatesButton" Content="Check for updates" HorizontalAlignment="Left"
+                      Click="OnCheckForUpdates" Margin="0,0,0,20"/>
+
               <TextBlock Style="{StaticResource Heading3Text}" Text="Ignored DLLs"/>
               <TextBlock Style="{StaticResource MicroText}"
                          Text="DLLs hidden from the DLLs tab's &quot;Detected in game folder&quot; list (e.g. files that aren't actually meant for injection). Un-ignore to make them detectable again."
