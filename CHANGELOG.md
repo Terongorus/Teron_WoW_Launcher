@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [2.2.0] - 2026-11-17
+
+### Added
+
+- **Check for updates** button (Settings → Launcher updates): manually checks GitHub Releases for a newer launcher installer while retaining the automatic startup check.
+- **Ignore updates** toggle (Settings → Launcher updates): global setting that ignores any newer launcher version found on GitHub Releases while enabled.
+
+### Fixed
+
+- **"What's new?" dialog**: normalized the 4-part assembly version (`X.Y.Z.Build`) to 3-part SemVer (`X.Y.Z`) when matching `CHANGELOG.md` headers so the post-update changelog popup displays properly, and avoided overwriting `LastSeenVersion` if the changelog fetch fails.
+- **Multi-monitor window placement**: persisted the last-used monitor device name (`WindowMonitor`) alongside window bounds/state and deferred `Maximized` restoration until `SourceInitialized` so the launcher opens directly on the saved monitor instead of starting on the primary monitor.
+
 ## [2.1.0] - 2026-11-17
 
 ### Added

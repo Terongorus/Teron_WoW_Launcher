@@ -78,6 +78,7 @@ public partial class MainWindow : Window
     private bool _addonBusy;
     private bool _mpqMetadataBusy;
     private bool _launchOperationBusy;
+    private bool _checkingLauncherUpdate;
     private CancellationTokenSource? _downloadCts;
     private bool _downloadSupportsPauseResume;
     private bool _downloadPaused;
@@ -205,6 +206,8 @@ public partial class MainWindow : Window
         MinimizeOnLaunchCheck.Unchecked += (_, _) => ScheduleSettingsSave();
         FocusOnGameCloseCheck.Checked += (_, _) => ScheduleSettingsSave();
         FocusOnGameCloseCheck.Unchecked += (_, _) => ScheduleSettingsSave();
+        IgnoreUpdatesCheck.Checked += (_, _) => ScheduleSettingsSave();
+        IgnoreUpdatesCheck.Unchecked += (_, _) => ScheduleSettingsSave();
 
         _loading = true;
         LoadSettingsIntoUi();
@@ -251,7 +254,7 @@ public partial class MainWindow : Window
 
         // "What's new" (if the version changed since last run) and the launcher's own update check,
         // in that order - see CheckForLauncherUpdateAsync's own doc comment for why sequential.
-        Loaded += (_, _) => _ = CheckForLauncherUpdateAsync();
+        Loaded += (_, _) => _ = CheckForLauncherUpdateAsync(isManual: false);
     }
 
     // ---------------- Custom title bar ----------------
@@ -291,6 +294,9 @@ public partial class MainWindow : Window
             Height = h;
         }
 
+        (IntPtr Handle, WindowMetrics.MONITORINFOEX Info)? targetMonitor =
+            !string.IsNullOrWhiteSpace(s.WindowMonitor) ? FindMonitorByDeviceName(s.WindowMonitor) : null;
+
         // Only trust a saved position if the window would still land on a currently-connected
         // monitor -- otherwise a since-removed second monitor could strand it off-screen forever.
         if (s.WindowLeft is double l && s.WindowTop is double t && IsOnVirtualScreen(l, t, Width, Height))
@@ -299,11 +305,65 @@ public partial class MainWindow : Window
             Left = l;
             Top = t;
         }
-
-        if (Enum.TryParse(s.SavedWindowState, out WindowState savedState))
+        else if (targetMonitor is not null)
         {
-            WindowState = savedState;
+            // Monitor exists even though saved coords were missing or off-screen; SourceInitialized
+            // below will move the HWND onto targetMonitor's work area.
+            WindowStartupLocation = WindowStartupLocation.Manual;
         }
+
+        // Defer WindowState = Maximized until SourceInitialized (after the HWND is created and
+        // confirmed to be on targetMonitor). Setting Maximized before Show() in WPF causes Win32
+        // and WindowChromeHelper's MonitorFromWindow check to resolve the primary monitor instead
+        // of the saved secondary monitor.
+        SourceInitialized += (_, _) => ApplyTargetMonitorAndWindowState(s, targetMonitor);
+    }
+
+    private void ApplyTargetMonitorAndWindowState(
+        LauncherSettings s, (IntPtr Handle, WindowMetrics.MONITORINFOEX Info)? targetMonitor)
+    {
+        IntPtr hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd != IntPtr.Zero && targetMonitor is { Handle: var targetHandle, Info: var info })
+        {
+            IntPtr currentMonitor = WindowMetrics.MonitorFromWindow(hwnd, WindowMetrics.MONITOR_DEFAULTTONEAREST);
+            if (currentMonitor != targetHandle)
+            {
+                WindowMetrics.RECT work = info.rcWork;
+                DpiScale dpi = VisualTreeHelper.GetDpi(this);
+                int pixelWidth = (int)Math.Round(Width * dpi.DpiScaleX);
+                int pixelHeight = (int)Math.Round(Height * dpi.DpiScaleY);
+                int targetX = work.Left + Math.Max(0, ((work.Right - work.Left) - pixelWidth) / 2);
+                int targetY = work.Top + Math.Max(0, ((work.Bottom - work.Top) - pixelHeight) / 2);
+                WindowMetrics.SetWindowPos(
+                    hwnd, IntPtr.Zero, targetX, targetY, 0, 0,
+                    WindowMetrics.SWP_NOSIZE | WindowMetrics.SWP_NOZORDER | WindowMetrics.SWP_NOACTIVATE);
+            }
+        }
+
+        if (Enum.TryParse(s.SavedWindowState, out WindowState savedState) && savedState == WindowState.Maximized)
+        {
+            WindowState = WindowState.Maximized;
+        }
+    }
+
+    private static (IntPtr Handle, WindowMetrics.MONITORINFOEX Info)? FindMonitorByDeviceName(string deviceName)
+    {
+        (IntPtr Handle, WindowMetrics.MONITORINFOEX Info)? match = null;
+        int cbSize = System.Runtime.InteropServices.Marshal.SizeOf<WindowMetrics.MONITORINFOEX>();
+
+        WindowMetrics.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr hMonitor, IntPtr _, ref WindowMetrics.RECT _, IntPtr _) =>
+        {
+            var info = new WindowMetrics.MONITORINFOEX { cbSize = cbSize };
+            if (WindowMetrics.GetMonitorInfoEx(hMonitor, ref info) &&
+                string.Equals(info.szDevice, deviceName, StringComparison.OrdinalIgnoreCase))
+            {
+                match = (hMonitor, info);
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        return match;
     }
 
     private static bool IsOnVirtualScreen(double left, double top, double width, double height)
@@ -316,9 +376,9 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Saves size/position/state for next launch. Uses RestoreBounds (the Normal-state bounds)
-    /// rather than the current Width/Height/Left/Top whenever the window is not Normal right now,
-    /// so maximizing or minimizing does not overwrite the size it should restore back to.
+    /// Saves size/position/state/monitor for next launch. Uses RestoreBounds (the Normal-state
+    /// bounds) rather than the current Width/Height/Left/Top whenever the window is not Normal
+    /// right now, so maximizing or minimizing does not overwrite the size it should restore back to.
     /// </summary>
     private void OnWindowClosing(object? sender, CancelEventArgs e)
     {
@@ -331,6 +391,23 @@ public partial class MainWindow : Window
             s.WindowTop = bounds.Top;
             s.WindowWidth = bounds.Width;
             s.WindowHeight = bounds.Height;
+        }
+
+        IntPtr hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd != IntPtr.Zero)
+        {
+            IntPtr monitor = WindowMetrics.MonitorFromWindow(hwnd, WindowMetrics.MONITOR_DEFAULTTONEAREST);
+            if (monitor != IntPtr.Zero)
+            {
+                var info = new WindowMetrics.MONITORINFOEX
+                {
+                    cbSize = System.Runtime.InteropServices.Marshal.SizeOf<WindowMetrics.MONITORINFOEX>()
+                };
+                if (WindowMetrics.GetMonitorInfoEx(monitor, ref info))
+                {
+                    s.WindowMonitor = info.szDevice;
+                }
+            }
         }
 
         s.SavedWindowState = WindowState.ToString();
@@ -2367,6 +2444,7 @@ public partial class MainWindow : Window
         GameFolderBox.Text = s.WowDirectory ?? string.Empty;
         MinimizeOnLaunchCheck.IsChecked = s.MinimizeOnLaunch;
         FocusOnGameCloseCheck.IsChecked = s.FocusOnGameClose;
+        IgnoreUpdatesCheck.IsChecked = s.IgnoreUpdates;
         RefreshRealmlistHistoryItems();
         SeedDefaultProfileIfNeeded();
         RefreshManagedDirectoryItems();
@@ -2885,6 +2963,7 @@ public partial class MainWindow : Window
         s.WowDirectory = string.IsNullOrWhiteSpace(GameFolderBox.Text) ? null : GameFolderBox.Text.Trim();
         s.MinimizeOnLaunch = MinimizeOnLaunchCheck.IsChecked == true;
         s.FocusOnGameClose = FocusOnGameCloseCheck.IsChecked == true;
+        s.IgnoreUpdates = IgnoreUpdatesCheck.IsChecked == true;
 
         DirectorySettings ds = _dirSettings.Current;
         ds.Name = string.IsNullOrWhiteSpace(ProfileNameBox.Text) ? null : ProfileNameBox.Text.Trim();
@@ -3432,21 +3511,52 @@ public partial class MainWindow : Window
 
     // ---------------- Launcher self-update / "what's new" ----------------
 
+    private void OnCheckForUpdates(object sender, RoutedEventArgs e)
+        => _ = CheckForLauncherUpdateAsync(isManual: true);
+
     /// <summary>
-    /// Runs the "what's new" check before the update check, sequentially rather than in parallel —
-    /// showing both as separate modal dialogs at once on startup would stack awkwardly. Neither step
+    /// Runs the "what's new" check before the update check on startup, sequentially rather than in
+    /// parallel — showing both as separate modal dialogs at once would stack awkwardly. Neither step
     /// can crash startup: each is wrapped in its own try/catch, matching this app's established
     /// "degrade to a warning, never throw from a startup-reachable path" convention.
     /// </summary>
-    private async Task CheckForLauncherUpdateAsync()
+    private async Task CheckForLauncherUpdateAsync(bool isManual)
     {
-        await ShowWhatsNewIfNeededAsync();
+        if (!isManual)
+        {
+            await ShowWhatsNewIfNeededAsync();
+        }
 
+        if (_checkingLauncherUpdate || _downloadCts is not null)
+        {
+            return;
+        }
+
+        if (!isManual && _settings.Current.IgnoreUpdates)
+        {
+            return;
+        }
+
+        _checkingLauncherUpdate = true;
+        CheckForUpdatesButton.IsEnabled = false;
         try
         {
             LauncherUpdateInfo? update = await _launcherUpdate.CheckForUpdateAsync(AppInfo.Version, CancellationToken.None);
             if (update is null)
             {
+                if (isManual)
+                {
+                    ShowToast("Launcher", $"You are running the latest version (v{AppInfo.Version}).", ToastSeverity.Success);
+                }
+                return;
+            }
+
+            if (_settings.Current.IgnoreUpdates)
+            {
+                if (isManual)
+                {
+                    ShowToast("Launcher", $"A newer version (v{update.Version}) is available, but ignored because 'Ignore updates' is enabled.", ToastSeverity.Info);
+                }
                 return;
             }
 
@@ -3507,37 +3617,75 @@ public partial class MainWindow : Window
             _log.Warn($"Launcher update check failed: {ex.Message}");
             ShowToast("Launcher", $"Update check failed: {ex.Message}", ToastSeverity.Error);
         }
+        finally
+        {
+            _checkingLauncherUpdate = false;
+            CheckForUpdatesButton.IsEnabled = true;
+        }
     }
 
     /// <summary>
     /// Shows what changed in this version once, the first time it runs after an update (detected by
-    /// comparing against the last version this popup was shown for). Silent on first-ever run — with
-    /// no prior version recorded there's nothing to compare against, so it just records the baseline.
+    /// comparing normalized Major.Minor.Patch against the last version this popup was shown for).
+    /// Silent on first-ever run — with no prior version recorded there's nothing to compare against,
+    /// so it just records the baseline.
     /// </summary>
     private async Task ShowWhatsNewIfNeededAsync()
     {
         string current = AppInfo.Version;
         string? lastSeen = _settings.Current.LastSeenVersion;
 
-        if (lastSeen is not null && !string.Equals(lastSeen, current, StringComparison.Ordinal))
+        if (lastSeen is null)
         {
-            try
-            {
-                string changelog = await DocsHttp.GetStringAsync(ChangelogUrl);
-                string? section = ExtractChangelogSection(changelog, current);
-                if (section is not null)
-                {
-                    ShowModal(new MarkdownPreviewDialog($"What's new in v{current}", section));
-                }
-            }
-            catch (Exception ex)
-            {
-                _log.Warn($"Could not load the \"what's new\" changelog section: {ex.Message}");
-            }
+            _settings.Current.LastSeenVersion = current;
+            _settings.Save();
+            return;
         }
 
-        _settings.Current.LastSeenVersion = current;
-        _settings.Save();
+        string currentNorm = NormalizeSemVer(current);
+        string lastSeenNorm = NormalizeSemVer(lastSeen);
+
+        if (string.Equals(lastSeenNorm, currentNorm, StringComparison.Ordinal))
+        {
+            if (!string.Equals(lastSeen, current, StringComparison.Ordinal))
+            {
+                _settings.Current.LastSeenVersion = current;
+                _settings.Save();
+            }
+            return;
+        }
+
+        try
+        {
+            string changelog = await DocsHttp.GetStringAsync(ChangelogUrl);
+            string? section = ExtractChangelogSection(changelog, current);
+            if (section is not null)
+            {
+                ShowModal(new MarkdownPreviewDialog($"What's new in v{currentNorm}", section));
+            }
+
+            _settings.Current.LastSeenVersion = current;
+            _settings.Save();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"Could not load the \"what's new\" changelog section: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Strips any 4th build-number component (e.g. "2.1.0.15" -> "2.1.0") so assembly versions
+    /// produced by IncrementBuildNumber match CHANGELOG.md's 3-part SemVer headers.
+    /// </summary>
+    private static string NormalizeSemVer(string version)
+    {
+        int dash = version.IndexOf('-', StringComparison.Ordinal);
+        string core = dash >= 0 ? version[..dash] : version;
+        if (Version.TryParse(core, out Version? parsed) && parsed.Build >= 0)
+        {
+            return $"{parsed.Major}.{parsed.Minor}.{parsed.Build}";
+        }
+        return version;
     }
 
     /// <summary>Slices out one version's own section from the full CHANGELOG.md text — from its
@@ -3545,11 +3693,18 @@ public partial class MainWindow : Window
     /// doesn't) up to (not including) the next "## [" header.</summary>
     private static string? ExtractChangelogSection(string changelog, string version)
     {
-        Match match = Regex.Match(
-            changelog,
-            $@"^## \[{Regex.Escape(version)}\].*?(?=^## \[|\z)",
-            RegexOptions.Multiline | RegexOptions.Singleline);
-        return match.Success ? match.Value.Trim() : null;
+        foreach (string candidate in new[] { version, NormalizeSemVer(version) })
+        {
+            Match match = Regex.Match(
+                changelog,
+                $@"^## \[{Regex.Escape(candidate)}\].*?(?=^## \[|\z)",
+                RegexOptions.Multiline | RegexOptions.Singleline);
+            if (match.Success)
+            {
+                return match.Value.Trim();
+            }
+        }
+        return null;
     }
 
     // ---------------- Play / Install / Update ----------------

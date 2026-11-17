@@ -17,6 +17,9 @@ public sealed class LauncherSettings
     /// <summary>Bring the launcher window back to the foreground once the game closes.</summary>
     public bool FocusOnGameClose { get; set; } = true;
 
+    /// <summary>When true, ignore any newer launcher releases found on GitHub Releases.</summary>
+    public bool IgnoreUpdates { get; set; }
+
     /// <summary>
     /// Realmlist values the user has previously used, most-recent first — offered as a dropdown next
     /// to the free-text realmlist field so switching between a private server's several login realms
@@ -59,4 +62,7 @@ public sealed class LauncherSettings
 
     /// <summary>"Normal", "Maximized", or "Minimized" — matches <see cref="System.Windows.WindowState"/>.</summary>
     public string? SavedWindowState { get; set; }
+
+    /// <summary>Win32 display device name (e.g. "\\.\DISPLAY2") of the monitor the window was last on.</summary>
+    public string? WindowMonitor { get; set; }
 }
