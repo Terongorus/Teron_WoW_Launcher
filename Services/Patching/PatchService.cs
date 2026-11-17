@@ -211,6 +211,11 @@ public sealed class PatchService
                     }
                 }
 
+                if (patch.BuildQuestLogSteps is not null && QuestLogPatcher.ByteHelpers.GetNumberOfSections(image) >= 7)
+                {
+                    applied.Add(patch.Id);
+                }
+
                 continue;
             }
 
@@ -394,12 +399,12 @@ public sealed class PatchService
 
                         if (data.Length != range.RangeEnd - range.RangeStart)
                         {
-                            log.Error($"Embedded quest range 0x{range.RangeStart:X}-0x{range.RangeEnd:X} has an unexpected size.");
+                            throw new InvalidDataException($"Embedded quest range 0x{range.RangeStart:X}-0x{range.RangeEnd:X} has an unexpected size.");
                         }
 
                         if (range.RangeEnd > patched.Length)
                         {
-                            log.Error("Quest patch range exceeds executable size.");
+                            throw new InvalidDataException("Quest patch range exceeds executable size.");
                         }
 
                         Buffer.BlockCopy(data, 0, patched, range.RangeStart, data.Length);
@@ -428,9 +433,9 @@ public sealed class PatchService
                     var isQuestBytesValid = QuestLogPatcher.VerifyPatchedQuestBytes(patched, questData, questStep.QuestRanges);
                     var isSectionValid = QuestLogPatcher.VerifySection(patched, questStep);
 
-                    if (!isLayoutValid && !isQuestBytesValid && !isSectionValid)
+                    if (!isLayoutValid || !isQuestBytesValid || !isSectionValid)
                     {
-                        log.Error("Patched executable failed structural verification: PE layout, quest bytes, and section header are all invalid.");
+                        throw new InvalidDataException("Patched executable failed structural verification.");
                     }
 
                     // Update the image reference
@@ -439,6 +444,7 @@ public sealed class PatchService
                 catch (Exception ex)
                 {
                     log.Error($"Error applying quest log patch: {ex.Message}");
+                    throw;
                 }
             }
         }

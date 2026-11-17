@@ -3,8 +3,8 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using TeronWoWLauncher.Native;
-
 using TeronWoWLauncher.Services.Core;
+
 namespace TeronWoWLauncher.Services.Launch;
 
 /// <summary>Identifiers of the launched game process, for downstream steps (e.g. auto-login).</summary>

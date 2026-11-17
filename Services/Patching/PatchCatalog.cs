@@ -288,7 +288,7 @@ public static class PatchCatalog
 
         list.Add(SoundChannels());
 
-        list.Add(QuestTweak("quest-log-patch", "Quest Log Patch", "Increases the amount of quests displayed in the quest log. Depends on the amount of quests returned by the backend of the realm that you're playing on.", OctoWoWQuestLogSectionOffset, OctoWoWQuestLogSectionLength, OctoWoWQuestLogSectionRVA, OctoWoWQuestLogSectionImageSize, QuestRanges, 0, 40, 20, true));
+        list.Add(QuestTweak("quest-log-patch", "Quest Log Patch", "Increases the amount of quests displayed in the quest log. Depends on the amount of quests returned by the backend of the realm that you're playing on.", OctoWoWQuestLogSectionOffset, OctoWoWQuestLogSectionLength, OctoWoWQuestLogSectionRVA, OctoWoWQuestLogSectionImageSize, QuestRanges, 20, 40, 25, true));
 
         return list;
     }
@@ -413,6 +413,15 @@ public static class PatchCatalog
             BuildQuestLogSteps = null
         };
 
+    private static readonly int[] QuestLimitFileOffsetsRange0 =
+    [
+        0x0DE5E5, 0x0DEA8F, 0x0DEB72, 0x0DEB83, 0x0DEBA5, 0x0DEBB6, 0x0DEBC9, 0x0DEBDE,
+        0x0DEBFE, 0x0DEC13, 0x0DEC30, 0x0DEC57, 0x0DF5F3, 0x0DF9CA, 0x0DFA4D, 0x0E0238,
+        0x0E08D5, 0x0E0990, 0x0E1474, 0x0E16A3
+    ];
+    private static readonly int[] QuestStructSizeFileOffsetsRange0 = [0x0DE625, 0x0DE734];
+    private const int QuestLimitFileOffsetRange1 = 0x1DDDF8;
+
     private static PatchDefinition QuestTweak(string id, string name, string description, int offset, int length, int RVA, int imageSize, IReadOnlyList<QuestLogPatcher.QuestRangeStruct> questRanges, int min, int max, int def, bool isInteger = true)
         => new()
         {
@@ -424,11 +433,44 @@ public static class PatchCatalog
             BuildSteps = null,
             BuildQuestLogSteps = v =>
             {
-                int uiValue = v ?? def;
+                int questLimit = Math.Clamp(v ?? def, min, max);
+                if (questLimit <= 20)
+                {
+                    return [];
+                }
+
+                var template = new PatchStep.QuestLogPatchStruct(offset, length, RVA, imageSize, questRanges);
+                byte[] payload = template.SectionPayloadBytes;
+                int extraQuests = questLimit - 20;
+                payload[0x19] = (byte)extraQuests;
+                payload[0x19B] = (byte)(extraQuests * 3);
+
+                byte[] range0Bytes = (byte[])questRanges[0].RangeContent.Clone();
+                int range0Start = questRanges[0].RangeStart;
+                foreach (int fileOffset in QuestLimitFileOffsetsRange0)
+                {
+                    range0Bytes[fileOffset - range0Start] = (byte)questLimit;
+                }
+
+                byte[] structSizeBytes = BitConverter.GetBytes((ushort)(questLimit * 12));
+                foreach (int fileOffset in QuestStructSizeFileOffsetsRange0)
+                {
+                    Buffer.BlockCopy(structSizeBytes, 0, range0Bytes, fileOffset - range0Start, 2);
+                }
+
+                byte[] range1Bytes = (byte[])questRanges[1].RangeContent.Clone();
+                int range1Start = questRanges[1].RangeStart;
+                range1Bytes[QuestLimitFileOffsetRange1 - range1Start] = (byte)questLimit;
+
+                IReadOnlyList<QuestLogPatcher.QuestRangeStruct> parameterizedRanges =
+                [
+                    new(questRanges[0].RangeStart, questRanges[0].RangeEnd, range0Bytes),
+                    new(questRanges[1].RangeStart, questRanges[1].RangeEnd, range1Bytes),
+                ];
+
                 return
                 [
-                    // create new QuestRangeStruct (binary section inside the EXE that needs to be patched) with the provided parameters and the UI value
-                    new(offset, length, RVA, imageSize, questRanges)
+                    new(offset, length, RVA, imageSize, parameterizedRanges, payload)
                 ];
             },
         };

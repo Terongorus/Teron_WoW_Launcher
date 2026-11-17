@@ -203,6 +203,8 @@ public partial class MainWindow : Window
         ConfigWtfCheck.Unchecked += (_, _) => ScheduleSettingsSave();
         MinimizeOnLaunchCheck.Checked += (_, _) => ScheduleSettingsSave();
         MinimizeOnLaunchCheck.Unchecked += (_, _) => ScheduleSettingsSave();
+        FocusOnGameCloseCheck.Checked += (_, _) => ScheduleSettingsSave();
+        FocusOnGameCloseCheck.Unchecked += (_, _) => ScheduleSettingsSave();
 
         _loading = true;
         LoadSettingsIntoUi();
@@ -2364,6 +2366,7 @@ public partial class MainWindow : Window
         LauncherSettings s = _settings.Current;
         GameFolderBox.Text = s.WowDirectory ?? string.Empty;
         MinimizeOnLaunchCheck.IsChecked = s.MinimizeOnLaunch;
+        FocusOnGameCloseCheck.IsChecked = s.FocusOnGameClose;
         RefreshRealmlistHistoryItems();
         SeedDefaultProfileIfNeeded();
         RefreshManagedDirectoryItems();
@@ -2881,6 +2884,7 @@ public partial class MainWindow : Window
         LauncherSettings s = _settings.Current;
         s.WowDirectory = string.IsNullOrWhiteSpace(GameFolderBox.Text) ? null : GameFolderBox.Text.Trim();
         s.MinimizeOnLaunch = MinimizeOnLaunchCheck.IsChecked == true;
+        s.FocusOnGameClose = FocusOnGameCloseCheck.IsChecked == true;
 
         DirectorySettings ds = _dirSettings.Current;
         ds.Name = string.IsNullOrWhiteSpace(ProfileNameBox.Text) ? null : ProfileNameBox.Text.Trim();
@@ -3578,15 +3582,22 @@ public partial class MainWindow : Window
 
         if (!running)
         {
-            FocusLauncherWindow();
+            if (_settings.Current.FocusOnGameClose)
+            {
+                FocusLauncherWindow();
+            }
+            else
+            {
+                _windowStateBeforeMinimize = null;
+            }
         }
     }
 
     /// <summary>
     /// Brings the launcher back to the foreground once the game exits, so the user doesn't have to
-    /// manually alt-tab back to it. Always active, regardless of MinimizeOnLaunch — restores from
-    /// whatever state we minimized it to (Normal or Maximized), or just re-activates it if it was
-    /// never minimized (e.g. the user alt-tabbed away rather than us hiding it).
+    /// manually alt-tab back to it. Controlled by <see cref="LauncherSettings.FocusOnGameClose"/> —
+    /// restores from whatever state we minimized it to (Normal or Maximized), or just re-activates
+    /// it if it was never minimized (e.g. the user alt-tabbed away rather than us hiding it).
     /// </summary>
     private void FocusLauncherWindow()
     {

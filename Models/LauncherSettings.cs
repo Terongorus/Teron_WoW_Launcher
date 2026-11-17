@@ -14,6 +14,9 @@ public sealed class LauncherSettings
     /// <summary>Minimize the launcher window as soon as Play successfully starts the game.</summary>
     public bool MinimizeOnLaunch { get; set; }
 
+    /// <summary>Bring the launcher window back to the foreground once the game closes.</summary>
+    public bool FocusOnGameClose { get; set; } = true;
+
     /// <summary>
     /// Realmlist values the user has previously used, most-recent first — offered as a dropdown next
     /// to the free-text realmlist field so switching between a private server's several login realms
