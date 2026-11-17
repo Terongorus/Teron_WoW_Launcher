@@ -14,7 +14,7 @@
 ; comment in TeronWoWLauncher.csproj. There is no x64 build of this app to package.
 
 #ifndef MyAppVersion
-  #define MyAppVersion "2.0.0"
+  #define MyAppVersion "2.1.0"
 #endif
 
 #define MyAppName "Teron WoW Launcher"
@@ -36,7 +36,7 @@ DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE.txt
 SetupIconFile=..\game.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
-OutputDir=..\bin\InstallerPackage
+OutputDir=..\Build\InstallerPackage
 OutputBaseFilename=TeronWoWLauncherSetup-x86
 Compression=lzma2/max
 SolidCompression=yes

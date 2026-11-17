@@ -65,10 +65,10 @@ public sealed class GameInstallService
     // needing to re-fetch/re-parse the remote archive just to find out what it would contain.
     private const string InstallManifestFileName = ".teronwow-install-manifest.txt";
 
-    public bool IsInstalled(string installDir) => File.Exists(Path.Combine(installDir, "WoW.exe"));
+    public static bool IsInstalled(string installDir) => File.Exists(Path.Combine(installDir, "WoW.exe"));
 
     /// <summary>Whether a manifest from a prior install/repair exists, i.e. whether DeleteInstalledClientFiles knows what it's allowed to remove.</summary>
-    public bool HasInstallManifest(string installDir) => File.Exists(Path.Combine(installDir, InstallManifestFileName));
+    public static bool HasInstallManifest(string installDir) => File.Exists(Path.Combine(installDir, InstallManifestFileName));
 
     /// <summary>
     /// Deletes exactly the top-level files/folders recorded by the last successful install/repair,
@@ -77,7 +77,7 @@ public sealed class GameInstallService
     /// in manually) — deleting is a destructive, one-way action, so this refuses to guess at a
     /// hardcoded file list rather than risk removing (or failing to remove) the wrong things.
     /// </summary>
-    public void DeleteInstalledClientFiles(string installDir)
+    public static void DeleteInstalledClientFiles(string installDir)
     {
         string manifestPath = Path.Combine(installDir, InstallManifestFileName);
         if (!File.Exists(manifestPath))
@@ -247,12 +247,12 @@ public sealed class GameInstallService
     /// attempt starts completely fresh instead of resuming stale bytes - the distinction between a
     /// hard Cancel and a Pause (which deliberately leaves this file alone so Resume can pick back up).
     /// </summary>
-    public void DeletePartialDownload()
+    public static void DeletePartialDownload()
     {
         try { File.Delete(TempZipPath); } catch { /* best-effort */ }
     }
 
-    private async Task DownloadAsync(
+    private static async Task DownloadAsync(
         string url, string tempZip, long existing, long total, IProgress<InstallProgress>? progress, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -306,7 +306,7 @@ public sealed class GameInstallService
     }
 
     /// <summary>Extracts the archive into destDir and returns the top-level names it actually wrote there (post-strip) - i.e. what DeleteInstalledClientFiles is later allowed to remove.</summary>
-    private static IReadOnlyList<string> ExtractZip(string zipPath, string destDir, IProgress<InstallProgress>? progress)
+    private static List<string> ExtractZip(string zipPath, string destDir, IProgress<InstallProgress>? progress)
     {
         using ZipArchive archive = ZipFile.OpenRead(zipPath);
 
@@ -333,12 +333,11 @@ public sealed class GameInstallService
         // wrapping folder (stripped above), that wrapper itself doesn't exist in destDir, only
         // whatever was inside it does; recompute post-strip so the manifest matches reality.
         var writtenTopLevels = strip.Length > 0
-            ? archive.Entries
+            ? [.. archive.Entries
                 .Where(e => !e.FullName.EndsWith('/') && e.FullName.Replace('\\', '/').StartsWith(strip, StringComparison.Ordinal))
                 .Select(e => e.FullName.Replace('\\', '/')[strip.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault())
                 .Where(n => !string.IsNullOrEmpty(n))
-                .Distinct()
-                .ToList()
+                .Distinct()]
             : topLevels;
 
         // destDirFull always ends with a separator so the StartsWith prefix check below can't be

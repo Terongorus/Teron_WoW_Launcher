@@ -21,23 +21,30 @@ namespace TeronWoWLauncher.Sources;
 /// That token URL isn't decoded any further here: it's requested exactly the way the site's own
 /// "Download" button would, redirecting (302) to the real file once the site's own gate accepts it.
 /// </summary>
-public sealed class WarperiaAddonSource : IAddonSource
+public sealed partial class WarperiaAddonSource : IAddonSource
 {
+    [GeneratedRegex(@"data-download-trigger=""1""[^>]*?data-addon-id=""(?<id>\d+)""", RegexOptions.Compiled | RegexOptions.Singleline)]
+    private static partial Regex WarperiaAddonIDRegEx();
+    [GeneratedRegex(@"id=""site-addons-js-extra""\s+src=""data:text/javascript;base64,(?<b64>[^""]+)""", RegexOptions.Compiled)]
+    private static partial Regex WarperiaDownloadNonceScriptRegEx();
+    [GeneratedRegex(@"""download_nonce"":""(?<nonce>[^""]+)""", RegexOptions.Compiled)]
+    private static partial Regex WarperiaDownloadNonceValueRegEx();
+
     private const string AjaxUrl = "https://warperia.com/wp-admin/admin-ajax.php";
 
     // The main "Download" button's own data-addon-id — the first data-download-trigger anchor on the
     // page, which precedes any alternate-expansion dropdown options further down (same "take the
     // first match" reasoning the old data-w-dl token lookup used).
     private static readonly Regex AddonIdRegex =
-        new(@"data-download-trigger=""1""[^>]*?data-addon-id=""(?<id>\d+)""", RegexOptions.Singleline | RegexOptions.Compiled);
+        WarperiaAddonIDRegEx();
 
     // The per-page WordPress nonce the AJAX download endpoint requires, embedded as a base64 data:
     // URI on the "site-addons-js-extra" inline script tag (WordPress's standard wp_localize_script
     // output) — e.g. var siteAddons={"ajax_url":"...","nonce":"...","download_nonce":"..."}.
     private static readonly Regex DownloadNonceScriptRegex =
-        new(@"id=""site-addons-js-extra""\s+src=""data:text/javascript;base64,(?<b64>[^""]+)""", RegexOptions.Compiled);
+        WarperiaDownloadNonceScriptRegEx();
     private static readonly Regex DownloadNonceValueRegex =
-        new(@"""download_nonce"":""(?<nonce>[^""]+)""", RegexOptions.Compiled);
+        WarperiaDownloadNonceValueRegEx();
 
     private readonly DirectArchiveAddonSource _archive = new();
 

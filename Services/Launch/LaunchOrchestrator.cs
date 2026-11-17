@@ -50,11 +50,11 @@ public sealed record PlayResult(bool Success, int? ProcessId);
 ///   5.   auto-login,
 ///   (6.  custom MPQ patches are managed separately and simply load with the patched client).
 /// </summary>
-public sealed class LaunchOrchestrator
+public sealed class LaunchOrchestrator(SettingsService settings, DirectorySettingsService dirSettings)
 {
     private readonly Logger _log = Logger.Instance;
-    private readonly SettingsService _settings;
-    private readonly DirectorySettingsService _dirSettings;
+    private readonly SettingsService _settings = settings;
+    private readonly DirectorySettingsService _dirSettings = dirSettings;
     private readonly PatchService _patch = new();
     private readonly ConfigWtfService _configWtf = new();
     private readonly DllListService _dlls = new();
@@ -65,15 +65,6 @@ public sealed class LaunchOrchestrator
     // Serializes every executable-patch rebuild (Play and apply-on-change both go through this),
     // so overlapping calls can never race on the same temp file or on WoW.exe itself.
     private readonly SemaphoreSlim _patchGate = new(1, 1);
-
-    // dirSettings is a shared instance owned by MainWindow, kept loaded for whichever WoW directory
-    // is currently selected (reloaded on every directory switch, same as AddonLibrary's _addons) -
-    // every method below trusts dirSettings.Current already reflects the wowDir it's given/resolves.
-    public LaunchOrchestrator(SettingsService settings, DirectorySettingsService dirSettings)
-    {
-        _settings = settings;
-        _dirSettings = dirSettings;
-    }
 
     /// <param name="onProcessLaunched">
     /// Fired as soon as the game process exists and every DLL is injected — before auto-login runs,
@@ -109,7 +100,7 @@ public sealed class LaunchOrchestrator
         {
             try
             {
-                _configWtf.ApplyRequiredSettings(wowDir);
+                ConfigWtfService.ApplyRequiredSettings(wowDir);
             }
             catch (Exception ex)
             {
@@ -184,7 +175,7 @@ public sealed class LaunchOrchestrator
     public async Task ApplyPatchesAsync(IProgress<string>? progress = null)
     {
         string wowDir = _settings.ResolveWowDirectory();
-        if (!File.Exists(_patch.WowExePath(wowDir)))
+        if (!File.Exists(PatchService.WowExePath(wowDir)))
         {
             return;
         }
@@ -210,12 +201,12 @@ public sealed class LaunchOrchestrator
     /// </summary>
     public BackupIntegrityStatus VerifyPristineBackupIntegrity(string wowDir)
     {
-        if (!_patch.BackupExists(wowDir))
+        if (!PatchService.BackupExists(wowDir))
         {
             return BackupIntegrityStatus.Ok;
         }
 
-        string? currentHash = _patch.ComputeBackupHash(wowDir);
+        string? currentHash = PatchService.ComputeBackupHash(wowDir);
         string? storedHash = _dirSettings.Current.PristineBackupHash;
 
         if (storedHash is null)
@@ -237,7 +228,7 @@ public sealed class LaunchOrchestrator
     /// </summary>
     public void DiscardCorruptBackup(string wowDir)
     {
-        try { File.Delete(_patch.BackupPath(wowDir)); }
+        try { File.Delete(PatchService.BackupPath(wowDir)); }
         catch (Exception ex) { _log.Warn($"Could not delete corrupt {PatchService.BackupFileName}: {ex.Message}"); }
 
         _dirSettings.Current.PristineBackupHash = null;
@@ -255,7 +246,7 @@ public sealed class LaunchOrchestrator
         await _patchGate.WaitAsync();
         try
         {
-            if (_processCheck.IsRunning(wowDir))
+            if (GameProcessService.IsRunning(wowDir))
             {
                 report("WoW is currently running — close the game to apply executable patch changes.");
                 return;
@@ -294,11 +285,11 @@ public sealed class LaunchOrchestrator
 
         string desiredSignature = BuildPatchSignature(catalog, enabled);
         string appliedSignature = _dirSettings.Current.AppliedPatchSignature ?? string.Empty;
-        bool backupReady = enabled.Count == 0 || _patch.BackupExists(wowDir);
+        bool backupReady = enabled.Count == 0 || PatchService.BackupExists(wowDir);
 
         // Skip entirely when the on-disk executable already reflects the current selection — no
         // rebuild happens every launch, only when the patch selection actually changes.
-        if (backupReady && desiredSignature == appliedSignature && File.Exists(_patch.WowExePath(wowDir)))
+        if (backupReady && desiredSignature == appliedSignature && File.Exists(PatchService.WowExePath(wowDir)))
         {
             report("Executable patches already up to date; skipping.");
             return;
@@ -306,7 +297,7 @@ public sealed class LaunchOrchestrator
 
         if (enabled.Count > 0)
         {
-            bool backupExistedBefore = _patch.BackupExists(wowDir);
+            bool backupExistedBefore = PatchService.BackupExists(wowDir);
             if (!_patch.EnsurePristineBackup(wowDir, catalog))
             {
                 // The specific mismatched-patch detail is already logged by EnsurePristineBackup itself
@@ -323,7 +314,7 @@ public sealed class LaunchOrchestrator
             // changes after that, so this only ever runs once per backup's lifetime, not every rebuild.
             if (!backupExistedBefore)
             {
-                _dirSettings.Current.PristineBackupHash = _patch.ComputeBackupHash(wowDir);
+                _dirSettings.Current.PristineBackupHash = PatchService.ComputeBackupHash(wowDir);
             }
 
             Dictionary<string, double?> parameters = catalog.ToDictionary(p => p.Id, EffectiveParam);
@@ -331,7 +322,7 @@ public sealed class LaunchOrchestrator
             report($"Patch selection changed — rebuilding WoW.exe with {enabled.Count} patch(es) from pristine backup...");
             _patch.Rebuild(wowDir, catalog, enabled, parameters);
         }
-        else if (_patch.BackupExists(wowDir) && !FilesEqual(_patch.WowExePath(wowDir), _patch.BackupPath(wowDir)))
+        else if (PatchService.BackupExists(wowDir) && !FilesEqual(PatchService.WowExePath(wowDir), PatchService.BackupPath(wowDir)))
         {
             // Everything was turned off but the exe still differs from pristine — revert it.
             report("No executable patches selected; restoring pristine WoW.exe.");

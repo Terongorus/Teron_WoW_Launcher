@@ -8,9 +8,9 @@ namespace TeronWoWLauncher.Dialogs;
 /// <summary>Lets the user pick which untracked AddOns folders to start tracking (adopt).</summary>
 public partial class LocalAddonsDialog : Window
 {
-    private readonly List<(LocalAddonCandidate Candidate, CheckBox Box)> _rows = new();
+    private readonly List<(LocalAddonCandidate Candidate, CheckBox Box)> _rows = [];
 
-    public List<LocalAddonCandidate> Selected { get; } = new();
+    public List<LocalAddonCandidate> Selected { get; } = [];
 
     public LocalAddonsDialog(IReadOnlyList<LocalAddonCandidate> candidates)
     {

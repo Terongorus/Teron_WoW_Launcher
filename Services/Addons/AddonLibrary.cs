@@ -1,18 +1,12 @@
-using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using LibGit2Sharp;
 using TeronWoWLauncher.Models;
-using TeronWoWLauncher.Sources;
-
 using TeronWoWLauncher.Services.Core;
+using TeronWoWLauncher.Sources;
 namespace TeronWoWLauncher.Services.Addons;
 
 /// <summary>
@@ -20,7 +14,7 @@ namespace TeronWoWLauncher.Services.Addons;
 /// sources and installer. Nothing outside addons.json and the game's own Interface\AddOns folder is
 /// touched.
 /// </summary>
-public sealed class AddonLibrary
+public sealed partial class AddonLibrary
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly HttpClient Http = CreateHttpClient();
@@ -30,7 +24,7 @@ public sealed class AddonLibrary
     private readonly AddonInstaller _installer = new();
     private readonly LocalAddonScanner _localScanner = new();
 
-    private List<InstalledAddon> _addons = new();
+    private List<InstalledAddon> _addons = [];
 
     public IReadOnlyList<InstalledAddon> Addons => _addons;
 
@@ -52,17 +46,17 @@ public sealed class AddonLibrary
             if (File.Exists(path))
             {
                 string json = File.ReadAllText(path);
-                _addons = JsonSerializer.Deserialize<List<InstalledAddon>>(json) ?? new List<InstalledAddon>();
+                _addons = JsonSerializer.Deserialize<List<InstalledAddon>>(json) ?? [];
             }
             else
             {
-                _addons = new List<InstalledAddon>();
+                _addons = [];
             }
         }
         catch (Exception ex)
         {
             _log.Warn($"Failed to load addons.json; starting empty. {ex.Message}");
-            _addons = new List<InstalledAddon>();
+            _addons = [];
         }
     }
 
@@ -113,14 +107,12 @@ public sealed class AddonLibrary
         {
             string addonsDir = AddonPaths.AddOnsDir(wowDir);
             string json = File.ReadAllText(legacyPath);
-            List<InstalledAddon> legacy = JsonSerializer.Deserialize<List<InstalledAddon>>(json) ?? new List<InstalledAddon>();
+            List<InstalledAddon> legacy = JsonSerializer.Deserialize<List<InstalledAddon>>(json) ?? [];
 
             var filtered = new List<InstalledAddon>();
             foreach (InstalledAddon addon in legacy)
             {
-                List<string> existingFolders = addon.Folders
-                    .Where(f => Directory.Exists(Path.Combine(addonsDir, f)))
-                    .ToList();
+                List<string> existingFolders = [.. addon.Folders.Where(f => Directory.Exists(Path.Combine(addonsDir, f)))];
                 if (existingFolders.Count > 0)
                 {
                     addon.Folders = existingFolders;
@@ -211,10 +203,9 @@ public sealed class AddonLibrary
             // entry now owns, which is exactly how two addons.json rows end up pointing at the one real
             // AddOns folder.
             var newFolders = folders.Select(f => f.Folder).ToList();
-            List<InstalledAddon> matches = _addons.Where(a =>
+            List<InstalledAddon> matches = [.. _addons.Where(a =>
                 string.Equals(a.SourceRef, download.SourceRef, StringComparison.OrdinalIgnoreCase)
-                || a.Folders.Intersect(newFolders, StringComparer.OrdinalIgnoreCase).Any())
-                .ToList();
+                || a.Folders.Intersect(newFolders, StringComparer.OrdinalIgnoreCase).Any())];
 
             InstalledAddon addon =
                 matches.FirstOrDefault(a => string.Equals(a.SourceRef, download.SourceRef, StringComparison.OrdinalIgnoreCase))
@@ -249,7 +240,7 @@ public sealed class AddonLibrary
             // Off the calling thread for the same reason the install copy above is - this deletes
             // the exact same temp content the copy just read, so it's just as capable of freezing
             // the window for a large multi-folder addon.
-            try { await Task.Run(() => DirectoryHelper.DeleteRecursive(download.ContentDir)); } catch { /* temp cleanup best-effort */ }
+            try { await Task.Run(() => DirectoryHelper.DeleteRecursive(download.ContentDir), ct); } catch { /* temp cleanup best-effort */ }
         }
     }
 
@@ -314,7 +305,7 @@ public sealed class AddonLibrary
         List<LocalAddonCandidate> candidates = ScanForUntracked(wowDir);
         if (candidates.Count == 0)
         {
-            return new LocalAddonSyncResult(0, 0, Array.Empty<LocalAddonCandidate>());
+            return new LocalAddonSyncResult(0, 0, []);
         }
 
         var byName = _addons
@@ -349,7 +340,7 @@ public sealed class AddonLibrary
             }
 
             InstalledAddon adoptedAddon = AdoptCore(candidate, wowDir);
-            byName[candidateName] = new List<InstalledAddon> { adoptedAddon };
+            byName[candidateName] = [adoptedAddon];
             adopted++;
         }
 
@@ -377,7 +368,7 @@ public sealed class AddonLibrary
             SourceKind = AddonSourceKind.Manual,
             SourceRef = null,
             Version = candidate.Version,
-            Folders = new List<string> { candidate.FolderName },
+            Folders = [candidate.FolderName],
             InstalledUtc = DateTime.UtcNow,
         };
 
@@ -442,9 +433,9 @@ public sealed class AddonLibrary
     }
 
     private static readonly Regex GitHubRemoteUrlRegex =
-        new(@"github\.com[:/](?<owner>[^/\s]+)/(?<repo>[^/\s]+?)(?:\.git)?/?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        GitHubRegEx();
     private static readonly Regex GitLabRemoteUrlRegex =
-        new(@"gitlab\.com[:/](?<path>[^\s]+?)(?:\.git)?/?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        GitLabRegEx();
 
     /// <summary>
     /// Reads a local addon folder's own ".git" checkout (if it has one) and, if its "origin" remote
@@ -706,7 +697,7 @@ public sealed class AddonLibrary
             return false;
         }
 
-        Match m = Regex.Match(sourceRef, @"github\.com/(?<owner>[^/\s]+)/(?<repo>[^/\s#?]+)", RegexOptions.IgnoreCase);
+        Match m = GitHubRepoRegEx().Match(sourceRef);
         if (!m.Success)
         {
             return false;
@@ -819,4 +810,11 @@ public sealed class AddonLibrary
             ? string.Join("\n\n", sections)
             : "No details available — this addon has no GitHub source, no README file, and its .toc carries no extra information.";
     }
+
+    [GeneratedRegex(@"github\.com[:/](?<owner>[^/\s]+)/(?<repo>[^/\s]+?)(?:\.git)?/?$", RegexOptions.IgnoreCase | RegexOptions.Compiled, "en-US")]
+    private static partial Regex GitHubRegEx();
+    [GeneratedRegex(@"gitlab\.com[:/](?<path>[^\s]+?)(?:\.git)?/?$", RegexOptions.IgnoreCase | RegexOptions.Compiled, "en-US")]
+    private static partial Regex GitLabRegEx();
+    [GeneratedRegex(@"github\.com/(?<owner>[^/\s]+)/(?<repo>[^/\s#?]+)", RegexOptions.IgnoreCase, "en-US")]
+    private static partial Regex GitHubRepoRegEx();
 }

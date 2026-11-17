@@ -29,7 +29,7 @@ public static class WindowChromeHelper
         window.SourceInitialized += (_, _) =>
         {
             IntPtr handle = new WindowInteropHelper(window).Handle;
-            HwndSource.FromHwnd(handle)?.AddHook((IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+            HwndSource.FromHwnd(handle)?.AddHook((hwnd, msg, wParam, lParam, ref handled)
                 => WindowProc(window, hwnd, msg, wParam, lParam, ref handled));
         };
     }

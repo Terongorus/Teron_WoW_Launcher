@@ -103,7 +103,9 @@ internal static class Kernel32
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr GetModuleHandle(string lpModuleName);
 
-    // Proc names are always ANSI, even when resolving a "...W" export.
+    // GetProcAddress is ANSI-only — the Windows export table uses byte strings, no wide variant exists.
+    // CharSet MUST be Ansi. Using Unicode causes P/Invoke to marshal the name as UTF-16, which makes
+    // GetProcAddress receive garbage and return NULL (→ "Could not resolve kernel32!LoadLibraryW").
     [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true, ExactSpelling = true)]
     public static extern IntPtr GetProcAddress(IntPtr hModule, string lpProcName);
 

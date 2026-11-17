@@ -38,11 +38,11 @@ public sealed class DllListService
 
     private readonly Logger _log = Logger.Instance;
 
-    public string DllsFilePath(string wowDir) => Path.Combine(wowDir, DllsFileName);
-    public string CacheFilePath(string wowDir) => PerDirectoryDataFolder.ResolvePath(wowDir, CacheFileName);
+    public static string DllsFilePath(string wowDir) => Path.Combine(wowDir, DllsFileName);
+    public static string CacheFilePath(string wowDir) => PerDirectoryDataFolder.ResolvePath(wowDir, CacheFileName);
 
     /// <summary>Resolves a dlls.txt entry (relative or absolute) to an absolute path, without checking existence.</summary>
-    public string ResolvePath(string wowDir, string name) => NormalizePath(wowDir, name);
+    public static string ResolvePath(string wowDir, string name) => NormalizePath(wowDir, name);
 
     /// <summary>
     /// The active DLL entries exactly as written (comments and blank lines removed, each trimmed),
@@ -125,12 +125,12 @@ public sealed class DllListService
         }
 
         var tracked = new HashSet<string>(ReadActiveNames(wowDir), StringComparer.OrdinalIgnoreCase);
-        var ignoredSet = new HashSet<string>(ignored ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+        var ignoredSet = new HashSet<string>(ignored ?? [], StringComparer.OrdinalIgnoreCase);
 
         List<string> files;
         try
         {
-            files = Directory.EnumerateFiles(wowDir, "*.dll", SearchOption.TopDirectoryOnly).ToList();
+            files = [.. Directory.EnumerateFiles(wowDir, "*.dll", SearchOption.TopDirectoryOnly)];
         }
         catch (Exception ex)
         {

@@ -39,7 +39,7 @@ public sealed class RealmStatusChecker
     /// </summary>
     private const string CanaryHost = "example.com";
 
-    public async Task<RealmStatus> CheckAsync(string? realmlistHost, CancellationToken ct = default)
+    public static async Task<RealmStatus> CheckAsync(string? realmlistHost, CancellationToken ct = default)
     {
         if (!TryParseHostPort(realmlistHost, out string host, out int port))
         {

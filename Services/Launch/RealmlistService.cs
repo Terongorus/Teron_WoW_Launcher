@@ -15,7 +15,7 @@ public sealed class RealmlistService
 
     private readonly Logger _log = Logger.Instance;
 
-    public string RealmlistPath(string wowDir) => Path.Combine(wowDir, FileName);
+    public static string RealmlistPath(string wowDir) => Path.Combine(wowDir, FileName);
 
     /// <summary>
     /// The current realm host from realmlist.wtf, or null if not set (or unreadable — best-effort,

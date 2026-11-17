@@ -40,13 +40,13 @@ public interface IAddonSource
 public sealed class AddonSourceResolver
 {
     private readonly IAddonSource[] _sources =
-    {
+    [
         new GitHubAddonSource(),
         new GitLabAddonSource(),
         new LegacyWowAddonSource(),
         new WarperiaAddonSource(),
         new DirectArchiveAddonSource(), // fallback, must stay last
-    };
+    ];
 
     public IAddonSource Resolve(string input) => _sources.First(s => s.CanHandle(input));
 }

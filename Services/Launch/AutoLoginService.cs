@@ -1,8 +1,4 @@
-using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using System.Threading;
-using System.Threading.Tasks;
 using TeronWoWLauncher.Native;
 
 using TeronWoWLauncher.Services.Core;
@@ -139,7 +135,7 @@ public sealed class AutoLoginService
     /// deadline — the caller's genuine last-resort fallback, not a routine occurrence now that
     /// measuring at all can't be denied the way opening a process handle could.
     /// </summary>
-    private bool WaitForLoadingToSettle(IntPtr hwnd, int timeoutMs, CancellationToken ct)
+    private static bool WaitForLoadingToSettle(IntPtr hwnd, int timeoutMs, CancellationToken ct)
     {
         long deadline = Environment.TickCount64 + timeoutMs;
         int quietSamples = 0;
@@ -172,7 +168,7 @@ public sealed class AutoLoginService
         return false;
     }
 
-    private IntPtr WaitForGameWindow(int pid, int timeoutMs, CancellationToken ct)
+    private static IntPtr WaitForGameWindow(int pid, int timeoutMs, CancellationToken ct)
     {
         long deadline = Environment.TickCount64 + timeoutMs;
         while (Environment.TickCount64 < deadline)
@@ -197,14 +193,14 @@ public sealed class AutoLoginService
         HashSet<int> childPids = GetChildProcessIds(pid);
 
         // Keep the delegate in a local so it can't be collected during the synchronous enumeration.
-        User32.EnumWindowsProc callback = (hwnd, _) =>
+        bool callback(nint hwnd, nint _)
         {
             if (!User32.IsWindowVisible(hwnd))
             {
                 return true;
             }
 
-            User32.GetWindowThreadProcessId(hwnd, out uint winPid);
+            uint processID = User32.GetWindowThreadProcessId(hwnd, out uint winPid);
             if (winPid == (uint)pid || childPids.Contains((int)winPid))
             {
                 result = hwnd;
@@ -212,7 +208,7 @@ public sealed class AutoLoginService
             }
 
             return true;
-        };
+        }
 
         User32.EnumWindows(callback, IntPtr.Zero);
         return result;
@@ -288,8 +284,7 @@ public sealed class AutoLoginService
                 },
             },
         };
-
-        User32.SendInput(1, new[] { input }, Marshal.SizeOf<User32.INPUT>());
+        _ = User32.SendInput(1, [input], Marshal.SizeOf<User32.INPUT>());
     }
 
     private static void SendKey(ushort vk, bool keyUp)
@@ -309,7 +304,6 @@ public sealed class AutoLoginService
                 },
             },
         };
-
-        User32.SendInput(1, new[] { input }, Marshal.SizeOf<User32.INPUT>());
+        _ = User32.SendInput(1, [input], Marshal.SizeOf<User32.INPUT>());
     }
 }

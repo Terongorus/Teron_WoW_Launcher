@@ -18,10 +18,12 @@ namespace TeronWoWLauncher.Sources;
 /// unauthenticated static download, so the actual fetch/extract is delegated entirely to
 /// <see cref="DirectArchiveAddonSource"/> once the real URL is known.
 /// </summary>
-public sealed class LegacyWowAddonSource : IAddonSource
+public sealed partial class LegacyWowAddonSource : IAddonSource
 {
-    private static readonly Regex DownloadUrlRegex =
-        new(@"onclick\s*=\s*[""']updateC\(\s*['""](?<url>[^'""]+)['""]", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"onclick\s*=\s*[""']updateC\(\s*['""](?<url>[^'""]+)['""]", RegexOptions.IgnoreCase | RegexOptions.Compiled, "en-US")]
+    private static partial Regex LegacyWoWAddonSourceRegEx();
+
+    private static readonly Regex DownloadUrlRegex = LegacyWoWAddonSourceRegEx();
 
     private readonly DirectArchiveAddonSource _archive = new();
 

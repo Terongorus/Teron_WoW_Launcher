@@ -56,7 +56,7 @@ public sealed class AddonInstaller
                 DirectoryHelper.DeleteRecursive(dest);
             }
 
-            List<string> excludeDirs = addons.Where(a => !PathEquals(a.Dir, dir)).Select(a => a.Dir).ToList();
+            List<string> excludeDirs = [.. addons.Where(a => !PathEquals(a.Dir, dir)).Select(a => a.Dir)];
             CopyDirectory(dir, dest, excludeDirs);
             (string? title, string? version) = TocMetadataReader.Read(dest);
             installed.Add(new InstalledFolderInfo(destName, title, version, name));
@@ -68,11 +68,10 @@ public sealed class AddonInstaller
 
     private static List<(string Dir, string Name)> FindAllTocDirs(string root)
     {
-        List<string> tocDirs = Directory
+        List<string> tocDirs = [.. Directory
             .EnumerateFiles(root, "*.toc", SearchOption.AllDirectories)
             .Select(f => Path.GetDirectoryName(f)!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
 
         var result = new List<(string, string)>();
         foreach (string dir in tocDirs)

@@ -77,7 +77,7 @@ internal static class MpqFileReader
         }
         else
         {
-            sectorPositions = Array.Empty<uint>();
+            sectorPositions = [];
         }
 
         using var result = new MemoryStream(checked((int)entry.FileSize));
@@ -146,7 +146,7 @@ internal static class MpqFileReader
 
         if (sector.Length == 0)
         {
-            return Array.Empty<byte>();
+            return [];
         }
 
         byte mask = sector[0];
