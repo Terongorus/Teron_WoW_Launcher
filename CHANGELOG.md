@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [2.2.1] - 2026-11-23
+
+### Fixed
+
+- **Quest Log Patch**: fixed an off-by-one payload offset (`0x19B` instead of `0x19A`) that overwrote a `jb` opcode in the `.octoql` section and caused an access violation (`0xC0000005`) when launching `WoW.exe` with the tweak enabled.
+- **Quest Log Patch rebuild detection**: versioned the `quest-log-patch` signature (`:v2`) so directories that already had the tweak applied automatically rebuild `WoW.exe` from the pristine backup without needing to toggle the patch off and on.
+
 ## [2.2.0] - 2026-11-17
 
 ### Added
