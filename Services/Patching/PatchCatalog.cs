@@ -443,7 +443,7 @@ public static class PatchCatalog
                 byte[] payload = template.SectionPayloadBytes;
                 int extraQuests = questLimit - 20;
                 payload[0x19] = (byte)extraQuests;
-                payload[0x19B] = (byte)(extraQuests * 3);
+                payload[0x19A] = (byte)(extraQuests * 3);
 
                 byte[] range0Bytes = (byte[])questRanges[0].RangeContent.Clone();
                 int range0Start = questRanges[0].RangeStart;

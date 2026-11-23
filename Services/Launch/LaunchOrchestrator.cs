@@ -353,7 +353,8 @@ public sealed class LaunchOrchestrator(SettingsService settings, DirectorySettin
             if (byId.TryGetValue(id, out PatchDefinition? p) && p.Parameter is not null)
             {
                 double v = EffectiveParam(p) ?? p.Parameter.Default;
-                parts.Add($"{id}={v.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+                string suffix = id == "quest-log-patch" ? ":v2" : string.Empty;
+                parts.Add($"{id}={v.ToString(System.Globalization.CultureInfo.InvariantCulture)}{suffix}");
             }
             else
             {
