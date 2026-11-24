@@ -120,43 +120,84 @@ public sealed class LaunchOrchestrator(SettingsService settings, DirectorySettin
 
         // 3-4. Resolve the DLL list and inject at launch. (realmlist.wtf is written when the user
         // saves settings, not here — no need to rewrite it every launch.)
-        List<string> injectList = _dlls.GetInjectionList(wowDir);
-        Report($"Prepared {injectList.Count} DLL(s) for injection.");
-
-        LaunchResult result;
+        List<string> userInjectList = _dlls.GetInjectionList(wowDir);
+        DirectorySettings s = _dirSettings.Current;
         try
         {
-            result = await Task.Run(() => _injector.Launch(wowExe, injectList), ct);
+            ConfigWtfService.SetAccountName(
+                wowDir,
+                s.RememberAccountNameInGame && !string.IsNullOrEmpty(s.Account) ? s.Account : null);
         }
         catch (Exception ex)
         {
+            _log.Warn($"Could not sync accountName in Config.WTF: {ex.Message}");
+        }
+
+        bool wantAutoLogin = s.AutoLoginEnabled && !string.IsNullOrEmpty(s.Account);
+        string? helperDllPath = wantAutoLogin ? AutoLoginPipeServer.ResolveHelperDllPath() : null;
+
+        List<string> injectList = helperDllPath is not null
+            ? [.. userInjectList, helperDllPath]
+            : userInjectList;
+        Report($"Prepared {userInjectList.Count} DLL(s) for injection.");
+
+        AutoLoginPipeServer? pipeServer = null;
+        LaunchResult result;
+        try
+        {
+            result = await Task.Run(() => _injector.Launch(
+                wowExe,
+                injectList,
+                helperDllPath is not null
+                    ? pid => pipeServer = AutoLoginPipeServer.StartListening(pid)
+                    : null), ct);
+        }
+        catch (Exception ex)
+        {
+            pipeServer?.Dispose();
             _log.Error("Launch/injection failed.", ex);
             return new PlayResult(false, null);
         }
 
-        // Remember the accepted DLL list so the UI can flag changes next time.
-        _dlls.UpdateCache(wowDir, injectList);
+        // Remember the accepted user DLL list so the UI can flag changes next time.
+        _dlls.UpdateCache(wowDir, userInjectList);
 
         // The process is confirmed alive and fully injected at this point, even though auto-login
         // (which can take several more seconds) hasn't run yet.
         onProcessLaunched?.Invoke(result.ProcessId);
 
         // 5. Auto-login.
-        DirectorySettings s = _dirSettings.Current;
-        if (s.AutoLoginEnabled && !string.IsNullOrEmpty(s.Account))
+        if (wantAutoLogin)
         {
             string password = _dirSettings.GetPassword();
+            bool inProcessActive = false;
 
-            // A Direct3D9 hook/translation DLL (most commonly DXVK's d3d9.dll) can take noticeably
-            // longer than the native renderer to stand up its device and show the game window, since
-            // it's building its own instance/device (Vulkan, for DXVK) underneath first - give
-            // auto-login extra patience in that case instead of giving up early with "game window
-            // not found before timeout".
-            bool hasD3D9Hook = injectList.Any(path =>
-                string.Equals(Path.GetFileName(path), "d3d9.dll", StringComparison.OrdinalIgnoreCase));
-            int loginTimeoutMs = hasD3D9Hook ? AutoLoginService.ExtendedTimeoutMs : AutoLoginService.DefaultTimeoutMs;
+            if (pipeServer is not null)
+            {
+                using (pipeServer)
+                {
+                    inProcessActive = await pipeServer.HandshakeAsync(s.Account, password, s.RememberAccountNameInGame, ct: ct);
+                }
+            }
 
-            await _autoLogin.PerformLoginAsync(result.ProcessId, s.Account, password, s.LoginDelayMs, loginTimeoutMs, ct);
+            if (inProcessActive)
+            {
+                _log.Info("Auto-login: in-process helper active (background login + disconnect re-login enabled).");
+            }
+            else
+            {
+                // A Direct3D9 hook/translation DLL (most commonly DXVK's d3d9.dll) can take noticeably
+                // longer than the native renderer to stand up its device and show the game window, since
+                // it's building its own instance/device (Vulkan, for DXVK) underneath first - give
+                // auto-login extra patience in that case instead of giving up early with "game window
+                // not found before timeout".
+                bool hasD3D9Hook = userInjectList.Any(path =>
+                    string.Equals(Path.GetFileName(path), "d3d9.dll", StringComparison.OrdinalIgnoreCase));
+                int loginTimeoutMs = hasD3D9Hook ? AutoLoginService.ExtendedTimeoutMs : AutoLoginService.DefaultTimeoutMs;
+                string? rememberedAccount = _configWtf.ReadKey(wowDir, "accountName");
+
+                await _autoLogin.PerformLoginAsync(result.ProcessId, s.Account, password, s.LoginDelayMs, loginTimeoutMs, rememberedAccount, ct);
+            }
         }
         else
         {

@@ -11,6 +11,8 @@ internal static class User32
     public const ushort VK_TAB = 0x09;
     public const ushort VK_RETURN = 0x0D;
     public const ushort VK_SHIFT = 0x10;
+    public const ushort VK_CONTROL = 0x11;
+    public const ushort VK_A = 0x41;
 
     public const uint INPUT_KEYBOARD = 1;
     public const uint KEYEVENTF_KEYUP = 0x0002;

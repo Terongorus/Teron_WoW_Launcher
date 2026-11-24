@@ -58,6 +58,7 @@ public sealed class AutoLoginService
         string password,
         int delayMs,
         int timeoutMs = DefaultTimeoutMs,
+        string? rememberedAccount = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(account))
@@ -113,13 +114,41 @@ public sealed class AutoLoginService
             }
 
             _log.Info("Auto-login: sending credentials.");
-            SendString(account);
-            Thread.Sleep(40);
-            PressVk(User32.VK_TAB);
-            Thread.Sleep(40);
-            SendString(password);
-            Thread.Sleep(40);
-            PressVk(User32.VK_RETURN);
+            if (!string.IsNullOrEmpty(rememberedAccount))
+            {
+                // When "Remember Account Name" is checked (SET accountName in Config.WTF), WoW
+                // pre-fills AccountLoginAccountEdit and starts keyboard focus on AccountLoginPasswordEdit.
+                if (string.Equals(rememberedAccount, account, StringComparison.OrdinalIgnoreCase))
+                {
+                    SendString(password);
+                    Thread.Sleep(40);
+                    PressVk(User32.VK_RETURN);
+                }
+                else
+                {
+                    PressVk(User32.VK_TAB);
+                    Thread.Sleep(40);
+                    SelectAll();
+                    Thread.Sleep(40);
+                    SendString(account);
+                    Thread.Sleep(40);
+                    PressVk(User32.VK_TAB);
+                    Thread.Sleep(40);
+                    SendString(password);
+                    Thread.Sleep(40);
+                    PressVk(User32.VK_RETURN);
+                }
+            }
+            else
+            {
+                SendString(account);
+                Thread.Sleep(40);
+                PressVk(User32.VK_TAB);
+                Thread.Sleep(40);
+                SendString(password);
+                Thread.Sleep(40);
+                PressVk(User32.VK_RETURN);
+            }
             _log.Info("Auto-login: credentials sent.");
         }, ct);
     }
@@ -265,6 +294,14 @@ public sealed class AutoLoginService
     {
         SendKey(vk, keyUp: false);
         SendKey(vk, keyUp: true);
+    }
+
+    private static void SelectAll()
+    {
+        SendKey(User32.VK_CONTROL, keyUp: false);
+        SendKey(User32.VK_A, keyUp: false);
+        SendKey(User32.VK_A, keyUp: true);
+        SendKey(User32.VK_CONTROL, keyUp: true);
     }
 
     private static void SendUnicodeKey(char ch, bool keyUp)

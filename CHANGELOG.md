@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow major.minor.hotfix (e.g. 1.2.3).
 
+## [2.3.0] - 2026-11-24
+
+### Added
+
+- **In-process Auto-Login & disconnect re-login**: added a bundled 32-bit native helper (`TeronAutoLogin.dll`) injected automatically when Auto-Login is enabled, receiving DPAPI-decrypted credentials in memory over a current-user named pipe instead of using `SendInput` or storing plaintext in `Config.wtf`.
+  - Logs in directly in-process without stealing foreground focus (`SetForegroundWindow`) or depending on keyboard layout.
+  - Detects when `WoW.exe` returns to the login screen after a disconnect and automatically re-fills and re-logs in once (dismissing `DISCONNECTED` notices while skipping if an error `GlueDialog` is shown, with a 1-retry guard).
+  - Automatically falls back to the existing `SendInput` auto-login if `TeronAutoLogin.dll` is missing or cannot hook a custom client build.
+- **Remember account name (in-game)** toggle (Profile → Login): syncs `SET accountName` in `WTF\Config.WTF` and the login screen's "Remember Account Name" checkbox across both the in-process helper and `SendInput` fallback.
+
+### Fixed
+
+- **Auto-Login `SendInput` fallback with "Remember Account Name"**: checked `WTF\Config.WTF`'s `accountName` CVar so when the client pre-fills the username and focuses the password box, the fallback no longer types the password into the username field.
+
 ## [2.2.1] - 2026-11-23
 
 ### Fixed

@@ -34,6 +34,8 @@ public sealed class DirectorySettings
     /// <summary>DPAPI-protected password (base64), scoped to the current Windows user.</summary>
     public string? EncryptedPassword { get; set; }
 
+    public bool RememberAccountNameInGame { get; set; }
+
     public bool SavePassword { get; set; } = true;
 
     public bool AutoLoginEnabled { get; set; }

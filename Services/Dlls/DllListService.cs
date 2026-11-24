@@ -25,16 +25,16 @@ public sealed class DllListService
 
     // Blizzard's own runtime DLLs that ship with the base 1.12.1 client — never offered as
     // trackable mods, since tracking/injecting them would be meaningless or harmful.
-    private static readonly HashSet<string> BaseGameDlls = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "dbghelp.dll", "DivxDecoder.dll", "fmod.dll", "ijl15.dll", "unicows.dll", "Scan.dll",
-    };
+    private static readonly HashSet<string> BaseGameDlls =
+    [
+with(StringComparer.OrdinalIgnoreCase),         "dbghelp.dll", "DivxDecoder.dll", "fmod.dll", "ijl15.dll", "unicows.dll", "Scan.dll",
+    ];
 
     // The launcher's own binaries, in case it lives in the game folder alongside WoW.exe.
-    private static readonly HashSet<string> LauncherOwnDlls = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "TeronWoWLauncher.dll", "SharpCompress.dll",
-    };
+    private static readonly HashSet<string> LauncherOwnDlls =
+    [
+with(StringComparer.OrdinalIgnoreCase),         "TeronWoWLauncher.dll", "SharpCompress.dll", "TeronAutoLogin.dll",
+    ];
 
     private readonly Logger _log = Logger.Instance;
 

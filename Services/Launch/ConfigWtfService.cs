@@ -105,6 +105,13 @@ public sealed partial class ConfigWtfService
     public static void RestoreValues(string wowDir, IReadOnlyDictionary<string, string?> originalValues)
         => Upsert(wowDir, originalValues.Select(kv => (kv.Key, kv.Value)));
 
+    /// <summary>
+    /// Writes or clears <c>SET accountName</c> in <c>WTF\Config.WTF</c> so WoW's in-game
+    /// "Remember Account Name" checkbox stays in sync with the launcher profile setting.
+    /// </summary>
+    public static void SetAccountName(string wowDir, string? accountName)
+        => Upsert(wowDir, [("accountName", string.IsNullOrWhiteSpace(accountName) ? null : accountName)]);
+
     private static void Upsert(string wowDir, IEnumerable<(string Key, string? Value)> edits)
     {
         string path = ConfigWtfPath(wowDir);
