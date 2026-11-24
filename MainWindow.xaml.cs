@@ -1,15 +1,10 @@
-using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Globalization;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Net.Http;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -187,6 +182,8 @@ public partial class MainWindow : Window
         AutoLoginCheck.Unchecked += (_, _) => ScheduleSettingsSave();
         AccountBox.TextChanged += (_, _) => ScheduleSettingsSave();
         PasswordBoxInput.PasswordChanged += (_, _) => ScheduleSettingsSave();
+        RememberAccountNameCheck.Checked += (_, _) => ScheduleSettingsSave();
+        RememberAccountNameCheck.Unchecked += (_, _) => ScheduleSettingsSave();
         SavePasswordCheck.Checked += (_, _) => ScheduleSettingsSave();
         SavePasswordCheck.Unchecked += (_, _) => ScheduleSettingsSave();
         GameFolderBox.TextChanged += (_, _) => ScheduleSettingsSave();
@@ -351,7 +348,7 @@ public partial class MainWindow : Window
         (IntPtr Handle, WindowMetrics.MONITORINFOEX Info)? match = null;
         int cbSize = System.Runtime.InteropServices.Marshal.SizeOf<WindowMetrics.MONITORINFOEX>();
 
-        WindowMetrics.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr hMonitor, IntPtr _, ref WindowMetrics.RECT _, IntPtr _) =>
+        WindowMetrics.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (hMonitor, _, ref _, _) =>
         {
             var info = new WindowMetrics.MONITORINFOEX { cbSize = cbSize };
             if (WindowMetrics.GetMonitorInfoEx(hMonitor, ref info) &&
@@ -1949,7 +1946,7 @@ public partial class MainWindow : Window
     // ---------------- Addons tab: Browse marketplace (issue #8) ----------------
 
     private readonly ObservableCollection<MarketplaceRowViewModel> _marketplaceRows = [];
-    private readonly Dictionary<string, MarketplaceRowViewModel> _marketplaceRowCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, MarketplaceRowViewModel> _marketplaceRowCache = [with(StringComparer.OrdinalIgnoreCase)];
     private List<MarketplaceAddonEntry> _marketplaceEntries = [];
     private bool _marketplaceInitialized;
     private bool _marketplaceBusy;
@@ -2944,6 +2941,7 @@ public partial class MainWindow : Window
         ProfileNameBox.Text = s.Name ?? string.Empty;
         AutoLoginCheck.IsChecked = s.AutoLoginEnabled;
         AccountBox.Text = s.Account;
+        RememberAccountNameCheck.IsChecked = s.RememberAccountNameInGame;
         SavePasswordCheck.IsChecked = s.SavePassword;
         PasswordBoxInput.Password = s.SavePassword ? _dirSettings.GetPassword() : string.Empty;
         DelayBox.Text = s.LoginDelayMs.ToString(CultureInfo.InvariantCulture);
@@ -2971,6 +2969,7 @@ public partial class MainWindow : Window
 
         ds.AutoLoginEnabled = AutoLoginCheck.IsChecked == true;
         ds.Account = AccountBox.Text.Trim();
+        ds.RememberAccountNameInGame = RememberAccountNameCheck.IsChecked == true;
         ds.SavePassword = SavePasswordCheck.IsChecked == true;
         ds.LoginDelayMs = int.TryParse(DelayBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int d)
             ? Math.Max(0, d)

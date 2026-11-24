@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Drawing.Text;
 using System.Globalization;
 using System.Text;
 using TeronWoWLauncher.Models;
@@ -422,7 +419,7 @@ public static class PatchCatalog
     private static readonly int[] QuestStructSizeFileOffsetsRange0 = [0x0DE625, 0x0DE734];
     private const int QuestLimitFileOffsetRange1 = 0x1DDDF8;
 
-    private static PatchDefinition QuestTweak(string id, string name, string description, int offset, int length, int RVA, int imageSize, IReadOnlyList<QuestLogPatcher.QuestRangeStruct> questRanges, int min, int max, int def, bool isInteger = true)
+    private static PatchDefinition QuestTweak(string id, string name, string description, int offset, int length, int RVA, int imageSize, List<QuestLogPatcher.QuestRangeStruct> questRanges, int min, int max, int def, bool isInteger = true)
         => new()
         {
             Id = id,

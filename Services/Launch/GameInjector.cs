@@ -31,7 +31,10 @@ public sealed class GameInjector
     /// (already resolved to absolute, existing files, in load order). Throws on any failure,
     /// terminating the suspended process so a half-patched game never runs.
     /// </summary>
-    public LaunchResult Launch(string wowExePath, IReadOnlyList<string> dllPaths)
+    public LaunchResult Launch(
+        string wowExePath,
+        IReadOnlyList<string> dllPaths,
+        Action<int>? onProcessCreated = null)
     {
         if (!File.Exists(wowExePath))
         {
@@ -84,6 +87,7 @@ public sealed class GameInjector
 
         try
         {
+            onProcessCreated?.Invoke(pi.dwProcessId);
             foreach (string dll in dllPaths)
             {
                 RemoteLoadLibrary(pi.hProcess, pLoadLibraryW, dll);

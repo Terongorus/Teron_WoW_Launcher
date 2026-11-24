@@ -41,7 +41,7 @@
     IsNewer's System.Version comparison works unchanged against a 4-part current version.
   -->
   <PropertyGroup>
-    <MajorMinorPatchVersion>2.2.1</MajorMinorPatchVersion>
+    <MajorMinorPatchVersion>2.3.0</MajorMinorPatchVersion>
     <BuildNumberFile>$(MSBuildProjectDirectory)\BuildNumber.txt</BuildNumberFile>
   </PropertyGroup>
 
@@ -105,7 +105,7 @@
 
   <ItemGroup>
     <!-- Extracts .rar/.7z addon archives (the BCL only handles .zip). Pure-managed, MIT. -->
-    <PackageReference Include="SharpCompress" Version="0.50.4" />
+    <PackageReference Include="SharpCompress" Version="0.50.11" />
     <!-- Real git clone/fetch for GitHub-tracked addons (see GitHubAddonSource) — avoids the
          api.github.com REST rate limit (60/hr) entirely, since git's smart-HTTP protocol isn't
          subject to it. Verified its native git2-*.dll loads correctly under this project's
@@ -157,6 +157,32 @@
     SelfContained aren't populated yet during the project's normal (early) static evaluation of
     top-level PropertyGroups - only once the publish pipeline itself is running.
   -->
+
+  <Target Name="BuildTeronAutoLoginHelper" BeforeTargets="AssignTargetPaths" Condition="'$(_TargetAssemblyProjectName)' == ''">
+    <PropertyGroup>
+      <_AutoLoginVcxproj>$(MSBuildProjectDirectory)\TeronAutoLogin\TeronAutoLogin.vcxproj</_AutoLoginVcxproj>
+      <_AutoLoginDll>$(MSBuildProjectDirectory)\Build\$(Configuration)\TeronAutoLogin\TeronAutoLogin.dll</_AutoLoginDll>
+      <_VsWhereExe>$(MSBuildProgramFiles32)\Microsoft Visual Studio\Installer\vswhere.exe</_VsWhereExe>
+    </PropertyGroup>
+
+    <Exec Command="&quot;$(_VsWhereExe)&quot; -latest -products * -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe" ConsoleToMSBuild="true" IgnoreExitCode="true" Condition="Exists('$(_AutoLoginVcxproj)') AND Exists('$(_VsWhereExe)')">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_VsMsBuildExe" />
+    </Exec>
+
+    <Exec Command="&quot;$(_VsMsBuildExe)&quot; &quot;$(_AutoLoginVcxproj)&quot; /p:Configuration=$(Configuration) /p:Platform=Win32 /p:SolutionDir=&quot;$(MSBuildProjectDirectory)\\&quot; /nologo /v:minimal" Condition="Exists('$(_AutoLoginVcxproj)') AND '$(_VsMsBuildExe)' != ''" />
+
+    <Warning Text="Visual Studio MSBuild was not found; skipping TeronAutoLogin.dll build (Auto-Login will fall back to SendInput)." Condition="Exists('$(_AutoLoginVcxproj)') AND '$(_VsMsBuildExe)' == ''" />
+
+    <ItemGroup Condition="Exists('$(_AutoLoginDll)')">
+      <ContentWithTargetPath Include="$(_AutoLoginDll)">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+        <TargetPath>TeronAutoLogin.dll</TargetPath>
+      </ContentWithTargetPath>
+    </ItemGroup>
+  </Target>
+
   <Target Name="BuildInnoSetupInstaller" AfterTargets="Publish">
     <PropertyGroup>
       <InnoSetupCompiler Condition="'$(InnoSetupCompiler)' == '' AND Exists('$(LocalAppData)\Programs\Inno Setup 6\ISCC.exe')">$(LocalAppData)\Programs\Inno Setup 6\ISCC.exe</InnoSetupCompiler>

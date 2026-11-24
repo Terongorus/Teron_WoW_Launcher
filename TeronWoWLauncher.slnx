@@ -1,9 +1,9 @@
 <Solution>
   <Configurations>
-    <Platform Name="Any CPU" />
     <Platform Name="x86" />
   </Configurations>
   <Project Path="TeronWoWLauncher.csproj">
-    <Platform Solution="*|x86" Project="x86" />
+    <Platform Project="x86" />
   </Project>
+  <Project Path="TeronAutoLogin\TeronAutoLogin.vcxproj" Id="7a4e2f10-6c3d-4b21-9e8a-5c1d0f3b2a19" />
 </Solution>

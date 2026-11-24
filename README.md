@@ -44,9 +44,7 @@ identifier**, and its login delay/WDB cleanup/account/password all live in the s
 Realmlist field carries a live status dot next to it — green when the auth server accepts a
 connection, red when a real host refuses or times out, gray when the address doesn't even resolve
 — and remembers every realm you've actually connected to, offered back as a history dropdown.
-Auto-login types your credentials directly (bypassing your keyboard layout, so a non-English
-layout can't garble your password) and waits for the client to actually finish loading before it
-types, instead of guessing a fixed delay. Click a different Profile in the list to switch to it —
+Auto-login injects a bundled 32-bit helper (`TeronAutoLogin.dll`) and passes your DPAPI-protected credentials in memory over a per-process named pipe — logging in directly without stealing window focus, and automatically re-logging in once if you disconnect back to the login screen (falling back to keyboard-layout-independent `SendInput` typing on unrecognized client builds). Click a different Profile in the list to switch to it —
 everything else in the launcher (Tweaks, DLLs, MPQ Patches, Addons) follows the active profile.
 Play/Install stays disabled, with a note explaining why, until a profile has a Client identifier
 assigned.

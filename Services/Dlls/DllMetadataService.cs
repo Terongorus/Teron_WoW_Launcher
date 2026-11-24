@@ -22,7 +22,7 @@ public sealed class DllMetadataService
 
     private readonly Logger _log = Logger.Instance;
 
-    public Dictionary<string, DllMetadata> Current { get; private set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, DllMetadata> Current { get; private set; } = [with(StringComparer.OrdinalIgnoreCase)];
 
     public static string FilePath(string wowDir) => PerDirectoryDataFolder.ResolvePath(wowDir, FileName);
 
@@ -35,17 +35,17 @@ public sealed class DllMetadataService
             {
                 Dictionary<string, DllMetadata>? loaded =
                     JsonSerializer.Deserialize<Dictionary<string, DllMetadata>>(File.ReadAllText(path));
-                Current = loaded ?? new Dictionary<string, DllMetadata>(StringComparer.OrdinalIgnoreCase);
+                Current = loaded ?? [with(StringComparer.OrdinalIgnoreCase)];
             }
             else
             {
-                Current = new Dictionary<string, DllMetadata>(StringComparer.OrdinalIgnoreCase);
+                Current = [with(StringComparer.OrdinalIgnoreCase)];
             }
         }
         catch (Exception ex)
         {
             _log.Warn($"Failed to load DLL metadata; using defaults. {ex.Message}");
-            Current = new Dictionary<string, DllMetadata>(StringComparer.OrdinalIgnoreCase);
+            Current = [with(StringComparer.OrdinalIgnoreCase)];
         }
 
         return Current;
